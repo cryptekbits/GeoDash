@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>City Search with Location Awareness</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input[type="text"], 
+        input[type="number"],
+        select {
+            width: 100%;
+            padding: 8px;
+            box-sizing: border-box;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        #results {
+            margin-top: 20px;
+            border-top: 1px solid #ddd;
+            padding-top: 20px;
+        }
+        .city-card {
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 15px;
+            margin-bottom: 10px;
+            background-color: #f9f9f9;
+        }
+        .city-name {
+            font-weight: bold;
+            font-size: 18px;
+            margin-bottom: 5px;
+        }
+        .location-toggle {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f0f0f0;
+            border-radius: 4px;
+        }
+        .toggle-btn {
+            background-color: #2196F3;
+            margin-right: 10px;
+        }
+        .coordinates-section {
+            margin-top: 15px;
+            padding: 15px;
+            background-color: #e9f7fe;
+            border-radius: 4px;
+            display: none;
+        }
+        .country-section {
+            margin-top: 15px;
+            padding: 15px;
+            background-color: #e9f7fe;
+            border-radius: 4px;
+            display: none;
+        }
+        .preset-locations {
+            margin-top: 10px;
+        }
+        .preset-btn {
+            background-color: #ff9800;
+            margin-right: 5px;
+            margin-bottom: 5px;
+            font-size: 14px;
+            padding: 5px 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>City Search with Location Awareness</h1>
+    <p>This demo shows how search results can be prioritized based on your location.</p>
+    
+    <div class="form-group">
+        <label for="search-query">Search for a city:</label>
+        <input type="text" id="search-query" placeholder="Enter city name (e.g., San, New, Lon)">
+    </div>
+    
+    <div class="form-group">
+        <label for="limit">Number of results:</label>
+        <input type="number" id="limit" value="5" min="1" max="20">
+    </div>
+    
+    <div class="form-group">
+        <label for="country-filter">Filter by country (optional):</label>
+        <input type="text" id="country-filter" placeholder="e.g., United States">
+    </div>
+    
+    <div class="location-toggle">
+        <label>Prioritize results based on your location:</label>
+        <button class="toggle-btn" id="btn-use-coordinates">Use Coordinates</button>
+        <button class="toggle-btn" id="btn-use-country">Use Country</button>
+        <button class="toggle-btn" id="btn-no-location">No Location</button>
+        
+        <div id="coordinates-section" class="coordinates-section">
+            <div class="form-group">
+                <label for="user-lat">Your Latitude:</label>
+                <input type="number" id="user-lat" step="0.000001" placeholder="e.g., 37.7749">
+            </div>
+            <div class="form-group">
+                <label for="user-lng">Your Longitude:</label>
+                <input type="number" id="user-lng" step="0.000001" placeholder="e.g., -122.4194">
+            </div>
+            
+            <div class="preset-locations">
+                <label>Quick presets:</label>
+                <button class="preset-btn" data-lat="37.7749" data-lng="-122.4194">San Francisco</button>
+                <button class="preset-btn" data-lat="40.7128" data-lng="-74.0060">New York</button>
+                <button class="preset-btn" data-lat="51.5074" data-lng="-0.1278">London</button>
+                <button class="preset-btn" data-lat="19.0760" data-lng="72.8777">Mumbai</button>
+                <button class="preset-btn" data-lat="40.4168" data-lng="-3.7038">Madrid</button>
+            </div>
+        </div>
+        
+        <div id="country-section" class="country-section">
+            <div class="form-group">
+                <label for="user-country">Your Country:</label>
+                <input type="text" id="user-country" placeholder="e.g., United States">
+            </div>
+            
+            <div class="preset-locations">
+                <label>Quick presets:</label>
+                <button class="country-preset-btn" data-country="United States">United States</button>
+                <button class="country-preset-btn" data-country="United Kingdom">United Kingdom</button>
+                <button class="country-preset-btn" data-country="India">India</button>
+                <button class="country-preset-btn" data-country="Spain">Spain</button>
+                <button class="country-preset-btn" data-country="Japan">Japan</button>
+            </div>
+        </div>
+    </div>
+    
+    <div class="form-group" style="margin-top: 20px;">
+        <button id="search-button">Search</button>
+    </div>
+    
+    <div id="results"></div>
+    
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // UI Elements
+            const searchButton = document.getElementById('search-button');
+            const searchQuery = document.getElementById('search-query');
+            const resultsDiv = document.getElementById('results');
+            const limitInput = document.getElementById('limit');
+            const countryFilter = document.getElementById('country-filter');
+            
+            // Location toggles
+            const btnUseCoordinates = document.getElementById('btn-use-coordinates');
+            const btnUseCountry = document.getElementById('btn-use-country');
+            const btnNoLocation = document.getElementById('btn-no-location');
+            const coordinatesSection = document.getElementById('coordinates-section');
+            const countrySection = document.getElementById('country-section');
+            
+            // Location inputs
+            const userLat = document.getElementById('user-lat');
+            const userLng = document.getElementById('user-lng');
+            const userCountry = document.getElementById('user-country');
+            
+            // Current location mode
+            let locationMode = 'none'; // 'coordinates', 'country', or 'none'
+            
+            // Toggle location modes
+            btnUseCoordinates.addEventListener('click', function() {
+                locationMode = 'coordinates';
+                coordinatesSection.style.display = 'block';
+                countrySection.style.display = 'none';
+                highlightActiveButton();
+            });
+            
+            btnUseCountry.addEventListener('click', function() {
+                locationMode = 'country';
+                coordinatesSection.style.display = 'none';
+                countrySection.style.display = 'block';
+                highlightActiveButton();
+            });
+            
+            btnNoLocation.addEventListener('click', function() {
+                locationMode = 'none';
+                coordinatesSection.style.display = 'none';
+                countrySection.style.display = 'none';
+                highlightActiveButton();
+            });
+            
+            // Highlight active button
+            function highlightActiveButton() {
+                btnUseCoordinates.style.backgroundColor = locationMode === 'coordinates' ? '#004d99' : '#2196F3';
+                btnUseCountry.style.backgroundColor = locationMode === 'country' ? '#004d99' : '#2196F3';
+                btnNoLocation.style.backgroundColor = locationMode === 'none' ? '#004d99' : '#2196F3';
+            }
+            
+            // Set initial location mode
+            locationMode = 'none';
+            highlightActiveButton();
+            
+            // Add event listeners for the preset location buttons
+            document.querySelectorAll('.preset-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    userLat.value = this.getAttribute('data-lat');
+                    userLng.value = this.getAttribute('data-lng');
+                });
+            });
+            
+            // Add event listeners for country presets
+            document.querySelectorAll('.country-preset-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    userCountry.value = this.getAttribute('data-country');
+                });
+            });
+            
+            // Search button event listener
+            searchButton.addEventListener('click', function() {
+                performSearch();
+            });
+            
+            // Also search when Enter key is pressed in the search box
+            searchQuery.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    performSearch();
+                }
+            });
+            
+            // Perform the search
+            function performSearch() {
+                const query = searchQuery.value.trim();
+                if (!query) {
+                    resultsDiv.innerHTML = '<p>Please enter a search query.</p>';
+                    return;
+                }
+                
+                let url = `/api/cities/search?query=${encodeURIComponent(query)}&limit=${limitInput.value}`;
+                
+                // Add country filter if provided
+                const country = countryFilter.value.trim();
+                if (country) {
+                    url += `&country=${encodeURIComponent(country)}`;
+                }
+                
+                // Add location parameters based on the selected mode
+                if (locationMode === 'coordinates') {
+                    const lat = userLat.value.trim();
+                    const lng = userLng.value.trim();
+                    if (lat && lng) {
+                        url += `&user_lat=${encodeURIComponent(lat)}&user_lng=${encodeURIComponent(lng)}`;
+                    }
+                } else if (locationMode === 'country') {
+                    const country = userCountry.value.trim();
+                    if (country) {
+                        url += `&user_country=${encodeURIComponent(country)}`;
+                    }
+                }
+                
+                // Show loading indicator
+                resultsDiv.innerHTML = '<p>Searching...</p>';
+                
+                // Fetch results from the API
+                fetch(url)
+                    .then(response => {
+                        if (!response.ok) {
+                            throw new Error('Network response was not ok');
+                        }
+                        return response.json();
+                    })
+                    .then(data => {
+                        displayResults(data);
+                    })
+                    .catch(error => {
+                        resultsDiv.innerHTML = `<p>Error: ${error.message}</p>`;
+                    });
+            }
+            
+            // Display the search results
+            function displayResults(cities) {
+                if (!cities || cities.length === 0) {
+                    resultsDiv.innerHTML = '<p>No cities found matching your query.</p>';
+                    return;
+                }
+                
+                let html = `<h2>Found ${cities.length} cities:</h2>`;
+                
+                // Add info about the search parameters
+                html += '<div style="margin-bottom: 20px;">';
+                html += `<p><strong>Search parameters:</strong> "${searchQuery.value}"`;
+                
+                if (countryFilter.value.trim()) {
+                    html += ` in ${countryFilter.value}`;
+                }
+                
+                if (locationMode === 'coordinates') {
+                    html += `, prioritizing results near [${userLat.value}, ${userLng.value}]`;
+                } else if (locationMode === 'country') {
+                    html += `, prioritizing results in ${userCountry.value}`;
+                }
+                
+                html += '</p></div>';
+                
+                // Display each city
+                cities.forEach(city => {
+                    html += `
+                        <div class="city-card">
+                            <div class="city-name">${city.name}</div>
+                            <div>${city.state_name ? city.state_name + ', ' : ''}${city.country_name}</div>
+                            <div>Coordinates: [${city.latitude.toFixed(4)}, ${city.longitude.toFixed(4)}]</div>
+                            <div>Rank: ${city.rank || 0}</div>
+                        </div>
+                    `;
+                });
+                
+                resultsDiv.innerHTML = html;
+            }
+        });
+    </script>
+</body>
+</html> 
