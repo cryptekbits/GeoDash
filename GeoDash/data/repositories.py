@@ -309,6 +309,84 @@ class CityRepository(BaseRepository):
                 
         return list(set(prefix_match_ids))
     
+    def _perform_postgresql_search(
+        self, 
+        query: str, 
+        limit: int = 10, 
+        country: Optional[str] = None,
+        user_lat: Optional[float] = None,
+        user_lng: Optional[float] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Perform a PostgreSQL-specific full-text search using the tsvector column.
+        
+        Args:
+            query: The search query 
+            limit: Maximum number of results to return
+            country: Optional country filter
+            user_lat: User's latitude for location-aware prioritization
+            user_lng: User's longitude for location-aware prioritization
+            
+        Returns:
+            List of matching cities as dictionaries
+        """
+        try:
+            # Convert the query to a tsquery format safely
+            # Split the query into words
+            query_words = query.strip().lower().split()
+            
+            # Build the SQL query with parameters
+            sql = f"""
+                SELECT id, name, ascii_name, country, country_code, state, state_code, lat, lng,
+                       ts_rank(search_vector, to_tsquery('english', %s)) AS rank
+                FROM {self.db_manager.city_table_name}
+                WHERE search_vector @@ to_tsquery('english', %s)
+            """
+            
+            # Create the tsquery parameter (words connected by &)
+            tsquery_param = ' & '.join(query_words) if query_words else ""
+            params = [tsquery_param, tsquery_param]
+            
+            # Add country filter if specified
+            if country:
+                sql += " AND lower(country) = %s"
+                params.append(country.lower())
+                
+            # Add location-based ranking if coordinates provided
+            if user_lat is not None and user_lng is not None:
+                # Incorporate distance into ranking using the <-> operator
+                sql += """
+                    ORDER BY 
+                        rank * 0.7 + 
+                        (1.0 / (1.0 + (point(lng, lat) <-> point(%s, %s)))) * 0.3
+                    DESC
+                """
+                params.extend([user_lng, user_lat])
+            else:
+                # Order by rank only
+                sql += " ORDER BY rank DESC"
+                
+            # Add limit
+            sql += " LIMIT %s"
+            params.append(limit)
+            
+            # Execute the query
+            with self.db_manager.cursor() as cursor:
+                cursor.execute(sql, params)
+                columns = [desc[0] for desc in cursor.description]
+                results = self._rows_to_dicts(cursor.fetchall(), columns)
+                
+                # Clean up result data
+                for city in results:
+                    city.pop('rank', None)
+                    
+                return results
+                
+        except Exception as e:
+            logger.error(f"PostgreSQL full-text search error: {str(e)}", exc_info=True)
+            # Fall back to regular search on error
+            return []
+
     @lru_cache(maxsize=5000)
     def search(
         self, 
@@ -343,6 +421,28 @@ class CityRepository(BaseRepository):
             query = query.strip().lower()
             start_time = time.time()
             logger.info(f"Searching for cities with query: '{query}', country: {country}, user_country: {user_country}")
+            
+            # Use PostgreSQL full-text search if available
+            if self.db_manager.db_type == 'postgresql':
+                postgresql_results = self._perform_postgresql_search(
+                    query, limit, country, user_lat, user_lng
+                )
+                
+                # If we got PostgreSQL results, use them
+                if postgresql_results:
+                    elapsed = time.time() - start_time
+                    logger.info(f"PostgreSQL full-text search completed in {elapsed*1000:.1f}ms")
+                    
+                    # Apply additional location-based prioritization if user_country is provided
+                    if user_country and not (user_lat and user_lng):
+                        postgresql_results = self._apply_location_prioritization(
+                            postgresql_results, None, None, user_country
+                        )
+                        
+                    return postgresql_results[:limit]
+
+            # Fall back to in-memory search if PostgreSQL search returns no results
+            # or is not available
             
             # Get city IDs to search (filtered by country if provided)
             city_ids_to_search = []
@@ -631,9 +731,9 @@ class CityRepository(BaseRepository):
         """
         Asynchronous search for cities with tiered response.
         
-        This method returns exact and prefix matches immediately, then performs
-        fuzzy matching asynchronously, calling the callback with updated results
-        when fuzzy matching completes.
+        This method returns results in multiple tiers as they become available:
+        1. First, exact and prefix matches (very fast, typically < 5ms)
+        2. Then fuzzy matches if needed (slower, typically < 100ms)
         
         Args:
             query: The search query (city name prefix)
@@ -642,21 +742,51 @@ class CityRepository(BaseRepository):
             user_lat: User's latitude for location-aware prioritization
             user_lng: User's longitude for location-aware prioritization
             user_country: User's country for location-aware prioritization
-            fuzzy_threshold: Minimum similarity score for fuzzy matching (0-100)
-            callback: Optional callback function to receive updated results after fuzzy matching
+            fuzzy_threshold: Minimum similarity score for fuzzy matching
+            callback: Function to call with results as they become available
             
         Returns:
-            Initial list of exact/prefix matches (without fuzzy matches)
+            Coroutine that returns the final list of results
         """
         if not query:
             return []
-            
+        
         try:
             query = query.strip().lower()
             start_time = time.time()
             logger.info(f"Starting async search with query: '{query}'")
             
-            # Get exact matches
+            # Use PostgreSQL full-text search if available
+            if self.db_manager.db_type == 'postgresql':
+                # Run in a thread pool since it involves database access
+                loop = asyncio.get_event_loop()
+                postgresql_results = await loop.run_in_executor(None, 
+                    lambda: self._perform_postgresql_search(
+                        query, limit, country, user_lat, user_lng
+                    )
+                )
+                
+                # If we got PostgreSQL results, use them
+                if postgresql_results:
+                    elapsed = time.time() - start_time
+                    logger.info(f"PostgreSQL full-text search completed in {elapsed*1000:.1f}ms")
+                    
+                    # Apply additional location-based prioritization if user_country is provided
+                    if user_country and not (user_lat and user_lng):
+                        postgresql_results = self._apply_location_prioritization(
+                            postgresql_results, None, None, user_country
+                        )
+                    
+                    # Call the callback with results if provided
+                    if callback:
+                        await callback(postgresql_results[:limit])
+                        
+                    return postgresql_results[:limit]
+            
+            # Fall back to in-memory search if PostgreSQL search returns no results
+            # or is not available
+            
+            # Get exact and prefix matches first (fast)
             exact_match_ids = []
             if query in self.city_names:
                 exact_match_ids.extend(self.city_names[query])
