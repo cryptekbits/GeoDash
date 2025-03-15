@@ -232,4 +232,23 @@ class DatabaseManager:
         
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Support for 'with' statement."""
-        self.close() 
+        self.close()
+    
+    def has_rtree_support(self) -> bool:
+        """
+        Check if the SQLite database supports R*Tree extension.
+        
+        Returns:
+            True if R*Tree is supported, False otherwise
+        """
+        if self.db_type != 'sqlite':
+            return False
+            
+        try:
+            with self.cursor() as cursor:
+                cursor.execute("PRAGMA compile_options")
+                compile_options = cursor.fetchall()
+                return any('RTREE' in option[0].upper() for option in compile_options)
+        except Exception as e:
+            logger.warning(f"Error checking R*Tree support: {str(e)}")
+            return False 

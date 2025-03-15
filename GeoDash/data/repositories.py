@@ -1035,6 +1035,54 @@ class GeoRepository(BaseRepository):
         """
         try:
             with self.db_manager.cursor() as cursor:
+                # For SQLite with R*Tree index, use a more efficient approach
+                if self.db_manager.db_type == 'sqlite':
+                    # Check if the R*Tree index exists
+                    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='city_rtree'")
+                    rtree_exists = cursor.fetchone()
+                    
+                    if rtree_exists:
+                        # Calculate bounding box for the given radius
+                        # Approximate degrees per km (1 degree of latitude ≈ 111.32 km)
+                        # For longitude, 1 degree ≈ 111.32 * cos(latitude) km
+                        lat_radius = radius_km / 111.32
+                        lng_radius = radius_km / (111.32 * abs(math.cos(math.radians(lat))))
+                        
+                        min_lat = lat - lat_radius
+                        max_lat = lat + lat_radius
+                        min_lng = lng - lng_radius
+                        max_lng = lng + lng_radius
+                        
+                        # Use R*Tree to get cities within the bounding box
+                        # R*Tree query checks if the bounding box of the city overlaps with our search box
+                        cursor.execute("""
+                            SELECT c.id, c.name, c.ascii_name, c.country, c.country_code, 
+                                   c.state, c.state_code, c.lat, c.lng
+                            FROM city_data c
+                            INNER JOIN city_rtree r ON c.id = r.id
+                            WHERE r.min_lat <= ? AND r.max_lat >= ? 
+                               AND r.min_lng <= ? AND r.max_lng >= ?
+                        """, (max_lat, min_lat, max_lng, min_lng))
+                        
+                        rows = cursor.fetchall()
+                        columns = ['id', 'name', 'ascii_name', 'country', 'country_code', 
+                                  'state', 'state_code', 'lat', 'lng']
+                        
+                        # Get the cities and filter by Haversine distance (more accurate than bounding box)
+                        cities_with_distance = []
+                        for city in self._rows_to_dicts(rows, columns):
+                            city_lat = city['lat']
+                            city_lng = city['lng']
+                            distance = self._haversine(lat, lng, city_lat, city_lng)
+                            
+                            if distance <= radius_km:
+                                city['distance_km'] = distance
+                                cities_with_distance.append(city)
+                        
+                        # Sort by distance
+                        return sorted(cities_with_distance, key=lambda x: x['distance_km'])
+                
+                # Fallback method for when R*Tree is not available or for other database types
                 # Get all city data
                 cursor.execute("""
                     SELECT id, name, ascii_name, country, country_code, state, state_code, lat, lng
