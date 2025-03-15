@@ -59,7 +59,7 @@ class CityData:
         
         # Check if database is empty and try to import data if needed
         try:
-            count = self.get_table_info()['count']
+            count = self.get_table_info()['row_count']
             if count == 0:
                 logger.info("Database is empty. Attempting to import city data...")
                 self.import_city_data()
@@ -84,7 +84,7 @@ class CityData:
         """
         try:
             # First check if we already have data
-            count = self.get_table_info().get('count', 0)
+            count = self.get_table_info().get('row_count', 0)
             if count > 0:
                 logger.info(f"Database already contains {count} cities. Import not needed.")
                 return True
@@ -100,6 +100,12 @@ class CityData:
                     from GeoDash.data.importer import download_city_data
                     csv_path = download_city_data(force=True)
                     logger.info(f"Retrying import with freshly downloaded data: {csv_path}")
+                    
+                    # Clear the database first
+                    with self.db_manager.cursor() as cursor:
+                        cursor.execute(f"DELETE FROM city_data")
+                        logger.info("Cleared existing data before retrying import")
+                    
                     imported = self.data_importer.import_from_csv(csv_path, batch_size, download_if_missing=False)
                     return imported > 0
                 except Exception as download_err:
@@ -107,19 +113,38 @@ class CityData:
             return False
     
     @lru_cache(maxsize=5000)
-    def search_cities(self, query: str, limit: int = 10, country: str = None) -> List[Dict[str, Any]]:
+    def search_cities(
+        self, 
+        query: str, 
+        limit: int = 10, 
+        country: str = None, 
+        user_lat: float = None, 
+        user_lng: float = None, 
+        user_country: str = None
+    ) -> List[Dict[str, Any]]:
         """
-        Search for cities by name.
+        Search for cities by name with optional location-aware prioritization.
         
         Args:
             query: The search query (city name or prefix)
             limit: Maximum number of results to return
-            country: Optional country filter
+            country: Optional country filter (restricts results to this country)
+            user_lat: User's latitude for location-aware prioritization
+            user_lng: User's longitude for location-aware prioritization
+            user_country: User's country for location-aware prioritization
             
         Returns:
-            List of matching cities as dictionaries
+            List of matching cities as dictionaries, prioritized by proximity
+            to user's location when provided
         """
-        return self.city_repository.search(query, limit, country)
+        return self.city_repository.search(
+            query, 
+            limit, 
+            country, 
+            user_lat=user_lat, 
+            user_lng=user_lng, 
+            user_country=user_country
+        )
     
     @lru_cache(maxsize=1000)
     def get_city(self, city_id: int) -> Optional[Dict[str, Any]]:
@@ -186,7 +211,7 @@ class CityData:
             country: Country name
             
         Returns:
-            List of cities in the state, sorted by population (descending)
+            List of cities in the state, sorted by name
         """
         return self.region_repository.get_cities_in_state(state, country)
     

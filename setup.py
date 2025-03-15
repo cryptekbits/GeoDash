@@ -80,6 +80,7 @@ setup(
         "pandas>=1.3.0",
         "flask>=2.0.0",
         "psycopg2-binary>=2.9.0",
+        "click>=8.0.0",
     ],
     entry_points={
         "console_scripts": [

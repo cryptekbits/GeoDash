@@ -46,6 +46,7 @@ When installing from source, the city data CSV file will be automatically downlo
 - Smart autocomplete that works with just a few characters (3+)
 - Prefix-based search for better UI autocomplete experience
 - Population-based sorting for more relevant results
+- Location-aware search that prioritizes results based on user's coordinates or country
 - Support for both SQLite and PostgreSQL databases
 - Command-line interface
 - API server mode
@@ -67,6 +68,10 @@ city_data = CityData(db_uri='postgresql://user:password@localhost:5432/dbname')
 
 # Search for cities with autocomplete support (works with just a few characters)
 cities = city_data.search_cities('New')  # Will find "New York", "New Delhi", etc.
+
+# Location-aware search (prioritizes results near user's location)
+cities = city_data.search_cities('San', user_lat=37.7749, user_lng=-122.4194)  # Prioritizes "San Francisco"
+cities = city_data.search_cities('New', user_country='United States')  # Prioritizes US cities like "New York"
 
 # Get cities near coordinates
 nearby_cities = city_data.get_cities_by_coordinates(40.7128, -74.0060, radius_km=10)
@@ -141,6 +146,7 @@ GeoDash server --host 0.0.0.0 --port 5000 --debug
 
 - `GET /api/city/<city_id>` - Get a city by ID
 - `GET /api/cities/search?query=<query>&limit=<limit>&country=<country>` - Search for cities with autocomplete support (works with just a few characters)
+- `GET /api/cities/search?query=<query>&user_lat=<lat>&user_lng=<lng>&user_country=<country>` - Location-aware search that prioritizes results based on user's location
 - `GET /api/cities/coordinates?lat=<lat>&lng=<lng>&radius_km=<radius>` - Get cities near coordinates
 - `GET /api/countries` - Get a list of countries
 - `GET /api/states?country=<country>` - Get states in a country
@@ -156,8 +162,16 @@ The module will create a SQLite database if no database URI is provided. The dat
 GeoDash requires city data to function properly. When you first use GeoDash, it will automatically:
 
 1. Check if the city data CSV file exists in standard locations
+   - Inside the package at `GeoDash/data/cities.csv`
+   - In the current working directory's `data/` folder
+   - In the user's home directory at `~/.geodash/data/cities.csv`
 2. If not found, it will attempt to download the file from our servers
 3. The download happens only once, when the module is first used
+
+When running in server mode, the database is initialized during application startup, ensuring that:
+- The database schema is created
+- City data is imported if needed
+- The application is ready to handle requests immediately
 
 The city data is sourced from the [countries-states-cities-database](https://github.com/dr5hn/countries-states-cities-database) repository maintained by [Darshan Gada](https://github.com/dr5hn).
 
@@ -178,7 +192,9 @@ If you're using GeoDash in an environment without internet access, you can:
    ```
 2. Or manually place the `cities.csv` file in one of these locations:
    - Inside the installed package at `GeoDash/data/cities.csv`
+   - In the user's home directory at `~/.geodash/data/cities.csv`
    - In the top-level `data/` directory if running from source
+   - In the current working directory's `data/` folder
 3. Or manually download the file from [here](https://raw.githubusercontent.com/dr5hn/countries-states-cities-database/refs/heads/master/csv/cities.csv) and place it in one of the above locations
 
 ## Data Format
@@ -191,6 +207,62 @@ The CSV file for city data should contain the following columns:
 - `longitude` (required): Longitude coordinate
 - `state_name` (optional): State or province name
 - `population` (optional): City population (used for sorting)
+
+## Location-Aware Search
+
+GeoDash provides a location-aware search feature that prioritizes search results based on the user's location:
+
+### How it works
+
+1. **Text matching remains the primary factor** - Results must match the search query text
+2. **Location prioritization** - From the matching cities, the results are prioritized based on:
+   - User's country (if provided via `user_country` parameter)
+   - Proximity to user's coordinates (if provided via `user_lat` and `user_lng` parameters)
+   
+### Examples
+
+```python
+# Prioritize "San" cities near San Francisco coordinates
+cities = city_data.search_cities(
+    'San',
+    user_lat=37.7749, 
+    user_lng=-122.4194
+)
+
+# Prioritize "New" cities in the United States
+cities = city_data.search_cities(
+    'New',
+    user_country='United States'
+)
+
+# Combined approach - prioritize "New" cities in the US and near New York coordinates
+cities = city_data.search_cities(
+    'New',
+    user_country='United States',
+    user_lat=40.7128, 
+    user_lng=-74.0060
+)
+```
+
+### API Integration
+
+You can use this feature in your frontend applications to provide personalized search results:
+
+```javascript
+// Get user's coordinates from browser
+navigator.geolocation.getCurrentPosition(position => {
+  const lat = position.coords.latitude;
+  const lng = position.coords.longitude;
+  
+  // Call the API with user's coordinates
+  fetch(`/api/cities/search?query=${searchText}&user_lat=${lat}&user_lng=${lng}`)
+    .then(response => response.json())
+    .then(data => {
+      // Display personalized results
+      updateResults(data.results);
+    });
+});
+```
 
 ## Dependencies
 

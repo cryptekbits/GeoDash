@@ -25,16 +25,20 @@ logger = logging.getLogger(__name__)
 
 def download_city_data(force: bool = False) -> str:
     """
-    Download the cities.csv file from the remote source.
+    Look for local cities.csv file first, and download only if not found.
+    
+    This function will:
+    1. Check multiple standard locations for an existing cities.csv file
+    2. Only download from the remote source if no local file is found or if force=True
     
     Args:
         force: If True, download even if the file already exists.
         
     Returns:
-        Path to the downloaded CSV file.
+        Path to the local CSV file (either pre-existing or newly downloaded).
         
     Raises:
-        Exception: If download fails.
+        Exception: If download is needed but fails.
     """
     # Check multiple potential locations for the data directory
     possible_paths = [
@@ -55,6 +59,12 @@ def download_city_data(force: bool = False) -> str:
         base_dir = os.path.dirname(os.path.abspath(sys.modules['GeoDash'].__file__))
     
     possible_paths.append(os.path.join(base_dir, 'data'))
+    
+    # Additional locations to check
+    possible_paths.extend([
+        os.path.join(os.getcwd(), 'data'),  # Current working directory's data folder
+        os.path.join(os.path.expanduser('~'), '.geodash', 'data')  # User's home directory
+    ])
     
     # Find the first valid directory
     data_dir = None
@@ -77,7 +87,7 @@ def download_city_data(force: bool = False) -> str:
         logger.info(f"Cities data already exists at {csv_path}")
         return csv_path
     
-    # Download the file
+    # Download the file only if it doesn't exist or force=True
     csv_url = "https://raw.githubusercontent.com/dr5hn/countries-states-cities-database/refs/heads/master/csv/cities.csv"
     
     try:
@@ -126,24 +136,52 @@ class CityDataImporter:
         if csv_path is None:
             try:
                 csv_path = self._find_csv_file()
+                logger.info(f"Found local city data file at {csv_path}")
             except FileNotFoundError:
                 if download_if_missing:
-                    logger.info("Attempting to download city data...")
+                    logger.info("Local city data file not found. Attempting to download...")
                     try:
                         csv_path = download_city_data()
                     except Exception as e:
                         raise FileNotFoundError(f"City data CSV file not found and download failed: {str(e)}")
                 else:
-                    raise
+                    raise FileNotFoundError("City data CSV file not found and download_if_missing is False")
         
         if not os.path.exists(csv_path):
             raise FileNotFoundError(f"City data CSV file not found at {csv_path}")
         
         logger.info(f"Importing city data from {csv_path}")
         
+        # Check if table already has data
+        with self.db_manager.cursor() as cursor:
+            cursor.execute(f"SELECT COUNT(*) FROM {self.table_name}")
+            count = cursor.fetchone()[0]
+            
+            if count > 0:
+                logger.info(f"Table {self.table_name} already contains {count} records. Clearing table before import.")
+                cursor.execute(f"DELETE FROM {self.table_name}")
+        
         # Read the CSV file with pandas
         start_time = time.time()
-        df = pd.read_csv(csv_path, encoding='utf-8')
+        try:
+            # Use keep_default_na=False to prevent "NA" from being interpreted as NaN
+            df = pd.read_csv(csv_path, encoding='utf-8', keep_default_na=False, na_values=[''])
+        except UnicodeDecodeError:
+            # Try with different encodings if UTF-8 fails
+            logger.warning("UTF-8 encoding failed, trying with ISO-8859-1")
+            df = pd.read_csv(csv_path, encoding='ISO-8859-1', keep_default_na=False, na_values=[''])
+        
+        # Check for required columns
+        required_columns = ['id', 'name', 'country_name', 'latitude', 'longitude']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        if missing_columns:
+            raise ValueError(f"CSV file is missing required columns: {', '.join(missing_columns)}")
+        
+        # Remove rows with missing required values
+        original_count = len(df)
+        df = df.dropna(subset=['name', 'country_name', 'latitude', 'longitude'])
+        if len(df) < original_count:
+            logger.warning(f"Removed {original_count - len(df)} rows with missing required values")
         
         # Standardize column names
         df = self._standardize_columns(df)
@@ -226,26 +264,62 @@ class CityDataImporter:
         Returns:
             Standardized dataframe.
         """
-        # Define column mapping
+        # Define column mapping based on the actual CSV structure
         column_mapping = {
-            'city_id': 'id',
-            'city_name': 'name',
-            'city_ascii': 'ascii_name',
-            'state_name': 'state',
+            'id': 'id',
+            'name': 'name',
+            'state_id': 'state_id', 
             'state_code': 'state_code',
+            'state_name': 'state',
+            'country_id': 'country_id',
+            'country_code': 'country_code',
             'country_name': 'country',
-            'iso2': 'country_code',
             'latitude': 'lat',
             'longitude': 'lng',
+            'wikiDataId': 'wiki_data_id'
         }
         
         # Rename columns that exist in the dataframe
         df = df.rename(columns={k: v for k, v in column_mapping.items() if k in df.columns})
         
-        # Fill missing values appropriately
-        df['state'] = df.get('state', pd.Series([''] * len(df))).fillna('')
-        df['state_code'] = df.get('state_code', pd.Series([''] * len(df))).fillna('')
-        df['population'] = df.get('population', pd.Series([0] * len(df))).fillna(0)
+        # Ensure required fields for schema
+        if 'ascii_name' not in df.columns:
+            df['ascii_name'] = df['name'].str.encode('ascii', errors='ignore').str.decode('ascii')
+        
+        # Fill missing values appropriately but maintain NULL values where they should be NULL
+        # Only fill with empty strings for fields that allow NULL in the database schema
+        df['state'] = df.get('state', pd.Series([None] * len(df)))
+        df['state_code'] = df.get('state_code', pd.Series([None] * len(df)))
+        df['country_id'] = df.get('country_id', pd.Series([None] * len(df)))
+        df['state_id'] = df.get('state_id', pd.Series([None] * len(df)))
+        df['wiki_data_id'] = df.get('wiki_data_id', pd.Series([None] * len(df)))
+        
+        # Handle missing country_code values by generating from country names
+        if 'country_code' not in df.columns or df['country_code'].isna().any():
+            # If country_code column doesn't exist, create it
+            if 'country_code' not in df.columns:
+                df['country_code'] = None
+                
+            # Find rows with missing country codes
+            missing_code_mask = df['country_code'].isna()
+            missing_count = missing_code_mask.sum()
+            
+            if missing_count > 0:
+                logger.info(f"Generating country codes for {missing_count} cities with missing values")
+                
+                # Generate country code from country name (first 2 letters)
+                for idx, row in df[missing_code_mask].iterrows():
+                    if pd.notna(row['country']):
+                        # Convert country name to a simple 2-letter code (not ISO standard, but better than NULL)
+                        country_name = row['country'].strip()
+                        # Use first two characters of country name, uppercase
+                        country_code = country_name[:2].upper() if len(country_name) >= 2 else 'XX'
+                        df.at[idx, 'country_code'] = country_code
+                        logger.debug(f"Generated country code {country_code} for {country_name}")
+                    else:
+                        # If country is also missing, use placeholder
+                        df.at[idx, 'country_code'] = 'XX'
+                        logger.warning(f"Using placeholder country code XX for city with ID {row.get('id', 'unknown')}")
         
         return df
     
@@ -267,61 +341,140 @@ class CityDataImporter:
         # Process in batches
         for i in range(0, len(cities), batch_size):
             batch = cities[i:i+batch_size]
-            self._import_batch(batch)
-            total_imported += len(batch)
+            imported_count = self._import_batch(batch)
+            total_imported += imported_count
             logger.info(f"Imported {min(i+batch_size, len(cities))}/{len(cities)} cities")
         
         return total_imported
     
-    def _import_batch(self, batch: List[Dict[str, Any]]):
+    def _import_batch(self, batch: List[Dict[str, Any]]) -> int:
         """
         Import a batch of city records.
         
         Args:
             batch: List of city records to import.
-        """
-        if self.db_manager.db_type == 'sqlite':
-            # SQLite batch insertion
-            placeholders = "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-            query = f"INSERT INTO {self.table_name} (id, name, ascii_name, country, country_code, state, state_code, lat, lng, population) VALUES {placeholders}"
             
-            with self.db_manager.cursor() as cursor:
-                for city in batch:
-                    cursor.execute(query, (
-                        city.get('id', None),
-                        city.get('name', ''),
-                        city.get('ascii_name', ''),
-                        city.get('country', ''),
-                        city.get('country_code', ''),
-                        city.get('state', ''),
-                        city.get('state_code', ''),
-                        city.get('lat', 0.0),
-                        city.get('lng', 0.0),
-                        city.get('population', 0)
-                    ))
+        Returns:
+            Number of records successfully imported.
+        """
+        # Filter out invalid records first
+        valid_cities = self._filter_valid_cities(batch)
+        
+        if not valid_cities:
+            return 0
+            
+        if self.db_manager.db_type == 'sqlite':
+            return self._import_batch_sqlite(valid_cities)
         else:  # PostgreSQL
-            # PostgreSQL batch insertion
-            with self.db_manager.cursor() as cursor:
-                params_list = []
-                for city in batch:
+            return self._import_batch_postgresql(valid_cities)
+    
+    def _filter_valid_cities(self, batch: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Filter out invalid city records.
+        
+        Args:
+            batch: List of city records to filter.
+            
+        Returns:
+            List of valid city records.
+        """
+        valid_cities = []
+        for city in batch:
+            # Skip records with missing essential data
+            if not city.get('name'):
+                logger.warning(f"Skipping city with ID {city.get('id')} due to missing name")
+                continue
+            
+            # Skip records with missing country_code to avoid NULL constraint failure
+            if not city.get('country_code'):
+                logger.warning(f"Skipping city with ID {city.get('id')} due to missing country_code")
+                continue
+                
+            valid_cities.append(city)
+        
+        return valid_cities
+    
+    def _import_batch_sqlite(self, cities: List[Dict[str, Any]]) -> int:
+        """
+        Import a batch of city records to SQLite.
+        
+        Args:
+            cities: List of valid city records to import.
+            
+        Returns:
+            Number of records successfully imported.
+        """
+        if not cities:
+            return 0
+            
+        placeholders = "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        query = f"""INSERT INTO {self.table_name} 
+                 (id, name, ascii_name, state_id, state_code, state, country_id, country_code, country, lat, lng, wiki_data_id) 
+                 VALUES {placeholders}"""
+        
+        imported_count = 0
+        with self.db_manager.cursor() as cursor:
+            for city in cities:
+                try:
+                    cursor.execute(query, (
+                        city.get('id'),
+                        city.get('name'),
+                        city.get('ascii_name') or city.get('name'),
+                        city.get('state_id'),
+                        city.get('state_code'),
+                        city.get('state'),
+                        city.get('country_id'),
+                        city.get('country_code'),
+                        city.get('country'),
+                        city.get('lat') or 0.0,
+                        city.get('lng') or 0.0,
+                        city.get('wiki_data_id')
+                    ))
+                    imported_count += 1
+                except Exception as e:
+                    logger.error(f"Error importing city {city.get('id')}: {str(e)}")
+                    
+        return imported_count
+    
+    def _import_batch_postgresql(self, cities: List[Dict[str, Any]]) -> int:
+        """
+        Import a batch of city records to PostgreSQL.
+        
+        Args:
+            cities: List of valid city records to import.
+            
+        Returns:
+            Number of records successfully imported.
+        """
+        if not cities:
+            return 0
+            
+        imported_count = 0
+        with self.db_manager.cursor() as cursor:
+            for city in cities:
+                try:
                     params = (
-                        city.get('id', None),
-                        city.get('name', ''),
-                        city.get('ascii_name', ''),
-                        city.get('country', ''),
-                        city.get('country_code', ''),
-                        city.get('state', ''),
-                        city.get('state_code', ''),
-                        city.get('lat', 0.0),
-                        city.get('lng', 0.0),
-                        city.get('population', 0)
+                        city.get('id'),
+                        city.get('name'),
+                        city.get('ascii_name') or city.get('name'),
+                        city.get('state_id'),
+                        city.get('state_code'),
+                        city.get('state'),
+                        city.get('country_id'),
+                        city.get('country_code'),
+                        city.get('country'),
+                        city.get('lat') or 0.0,
+                        city.get('lng') or 0.0,
+                        city.get('wiki_data_id')
                     )
-                    params_list.append(params)
-                
-                args_str = ','.join(cursor.mogrify("(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", params).decode('utf-8') 
-                                    for params in params_list)
-                
-                cursor.execute(f"INSERT INTO {self.table_name} (id, name, ascii_name, country, country_code, state, state_code, lat, lng, population) VALUES {args_str}")
+                    cursor.execute(f"""INSERT INTO {self.table_name} 
+                                    (id, name, ascii_name, state_id, state_code, state, country_id, country_code, country, lat, lng, wiki_data_id) 
+                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""", params)
+                    imported_count += 1
+                except Exception as e:
+                    logger.error(f"Error importing city {city.get('id')}: {str(e)}")
+                    
+        return imported_count
     
     def _update_postgis_geometry(self):
         """
@@ -342,4 +495,12 @@ class CityDataImporter:
                 cursor.execute(f"UPDATE {self.table_name} SET geom = ST_SetSRID(ST_MakePoint(lng, lat), 4326) WHERE geom IS NULL")
                 logger.info("Updated PostGIS geometry data")
         except Exception as e:
-            logger.warning(f"Failed to update PostGIS geometry: {str(e)}") 
+            logger.warning(f"Failed to update PostGIS geometry: {str(e)}")
+
+def clean_row(row):
+    # Current code removes rows with missing values but doesn't handle country_code specifically
+    should_remove = any(row[field] in MISSING_VALUES for field in REQUIRED_FIELDS)
+    return None if should_remove else row
+
+# Proposed fix: Add country_code validation
+REQUIRED_FIELDS = ['ascii_name', 'country', 'country_code', 'lat', 'lng']  # Ensure country_code is required 

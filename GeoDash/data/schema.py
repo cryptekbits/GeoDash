@@ -63,13 +63,15 @@ class SchemaManager:
                 id INTEGER PRIMARY KEY,
                 name TEXT NOT NULL,
                 ascii_name TEXT NOT NULL,
-                country TEXT NOT NULL,
-                country_code CHAR(2) NOT NULL,
-                state TEXT,
+                state_id INTEGER,
                 state_code TEXT,
+                state TEXT,
+                country_id INTEGER,
+                country_code CHAR(2) NOT NULL,
+                country TEXT NOT NULL,
                 lat REAL NOT NULL,
                 lng REAL NOT NULL,
-                population INTEGER
+                wiki_data_id TEXT
             )
             '''
         else:  # PostgreSQL
@@ -79,13 +81,15 @@ class SchemaManager:
                 id SERIAL PRIMARY KEY,
                 name TEXT NOT NULL,
                 ascii_name TEXT NOT NULL,
-                country TEXT NOT NULL,
-                country_code CHAR(2) NOT NULL,
-                state TEXT,
+                state_id INTEGER,
                 state_code TEXT,
+                state TEXT,
+                country_id INTEGER,
+                country_code CHAR(2) NOT NULL,
+                country TEXT NOT NULL,
                 lat DOUBLE PRECISION NOT NULL,
                 lng DOUBLE PRECISION NOT NULL,
-                population INTEGER
+                wiki_data_id TEXT
             )
             '''
         
@@ -101,8 +105,7 @@ class SchemaManager:
             {'name': 'idx_city_name', 'columns': ['ascii_name']},
             {'name': 'idx_city_country', 'columns': ['country']},
             {'name': 'idx_city_state', 'columns': ['state']},
-            {'name': 'idx_city_coords', 'columns': ['lat', 'lng']},
-            {'name': 'idx_city_population', 'columns': ['population']}
+            {'name': 'idx_city_coords', 'columns': ['lat', 'lng']}
         ]
         
         for index in indexes:
