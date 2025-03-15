@@ -16,6 +16,7 @@ import werkzeug.exceptions
 
 from GeoDash.data import CityData
 from GeoDash.data.database import DatabaseManager
+from GeoDash.utils import log_error_with_github_info
 
 # Configure logging
 logging.basicConfig(
@@ -51,7 +52,7 @@ def create_app(db_uri: Optional[str] = None) -> Flask:
         logger.info(f"Database initialized with {record_count} city records")
         city_data.close()
     except Exception as e:
-        logger.error(f"Failed to pre-initialize database: {str(e)}")
+        log_error_with_github_info(e, "Failed to pre-initialize database")
         app.config['INITIALIZED'] = False
     
     # Configure JSON responses
@@ -101,7 +102,9 @@ def create_app(db_uri: Optional[str] = None) -> Flask:
     @app.errorhandler(Exception)
     def handle_exception(error: Exception) -> Tuple[Dict[str, Any], int]:
         """Handle generic exceptions."""
-        logger.exception("Unhandled exception occurred")
+        # Use the GitHub issue reporting function for unhandled exceptions
+        log_error_with_github_info(error, "Unhandled server exception")
+        
         return {
             'error': 'Internal Server Error',
             'message': 'An unexpected error occurred'

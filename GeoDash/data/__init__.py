@@ -13,7 +13,10 @@ from GeoDash.data.repositories import (
     BaseRepository,
     CityRepository,
     GeoRepository,
-    RegionRepository
+    RegionRepository,
+    get_city_repository,
+    get_geo_repository,
+    get_region_repository
 )
 
 __all__ = [
@@ -24,5 +27,8 @@ __all__ = [
     'BaseRepository',
     'CityRepository',
     'GeoRepository',
-    'RegionRepository'
+    'RegionRepository',
+    'get_city_repository',
+    'get_geo_repository',
+    'get_region_repository'
 ] 

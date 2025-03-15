@@ -9,6 +9,8 @@ import logging
 import math
 from typing import Dict, List, Any, Tuple, Optional
 from functools import lru_cache
+import time
+import asyncio
 
 from GeoDash.data.database import DatabaseManager
 
@@ -21,12 +23,76 @@ except ImportError:
     USING_RAPIDFUZZ = False
     logging.warning("rapidfuzz not found, using slower fuzzywuzzy. Install rapidfuzz for better performance.")
 
+# For trie implementation
+try:
+    import pygtrie as trie
+    USING_TRIE = True
+except ImportError:
+    USING_TRIE = False
+    logging.warning("pygtrie not found, using slower dictionary lookups. Install pygtrie for better performance.")
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Global singleton repository instances
+_city_repository_instance = None
+_geo_repository_instance = None
+_region_repository_instance = None
+
+def get_city_repository(db_manager: DatabaseManager) -> 'CityRepository':
+    """
+    Get the global CityRepository singleton instance.
+    
+    This ensures the city data is only loaded once into memory when the
+    server starts, not for each request.
+    
+    Args:
+        db_manager: Database manager to use if repository needs to be created
+        
+    Returns:
+        The global CityRepository instance
+    """
+    global _city_repository_instance
+    if _city_repository_instance is None:
+        logger.info("Creating global CityRepository singleton instance")
+        _city_repository_instance = CityRepository(db_manager)
+    return _city_repository_instance
+
+def get_geo_repository(db_manager: DatabaseManager) -> 'GeoRepository':
+    """
+    Get the global GeoRepository singleton instance.
+    
+    Args:
+        db_manager: Database manager to use if repository needs to be created
+        
+    Returns:
+        The global GeoRepository instance
+    """
+    global _geo_repository_instance
+    if _geo_repository_instance is None:
+        logger.info("Creating global GeoRepository singleton instance")
+        _geo_repository_instance = GeoRepository(db_manager)
+    return _geo_repository_instance
+
+def get_region_repository(db_manager: DatabaseManager) -> 'RegionRepository':
+    """
+    Get the global RegionRepository singleton instance.
+    
+    Args:
+        db_manager: Database manager to use if repository needs to be created
+        
+    Returns:
+        The global RegionRepository instance
+    """
+    global _region_repository_instance
+    if _region_repository_instance is None:
+        logger.info("Creating global RegionRepository singleton instance")
+        _region_repository_instance = RegionRepository(db_manager)
+    return _region_repository_instance
 
 class BaseRepository:
     """
@@ -91,11 +157,16 @@ class CityRepository(BaseRepository):
         self.ascii_names = {} # Map of lowercase ASCII name to list of city IDs
         self.country_cities = {} # Map of country to list of city IDs
         
+        # Trie data structures for efficient prefix matching
+        if USING_TRIE:
+            self.name_trie = trie.CharTrie()
+            self.ascii_trie = trie.CharTrie()
+        
         # Load cities into memory for fast searching
         self._load_cities()
         
     def _load_cities(self):
-        """Load all cities into memory for fast fuzzy searching."""
+        """Load all cities into memory for fast search."""
         logger.info("Loading all cities into memory for fast search...")
         try:
             with self.db_manager.cursor() as cursor:
@@ -131,6 +202,16 @@ class CityRepository(BaseRepository):
                     if country not in self.country_cities:
                         self.country_cities[country] = []
                     self.country_cities[country].append(city_id)
+                    
+                    # Add to tries if available
+                    if USING_TRIE:
+                        if name_lower not in self.name_trie:
+                            self.name_trie[name_lower] = []
+                        self.name_trie[name_lower].append(city_id)
+                        
+                        if ascii_lower not in self.ascii_trie:
+                            self.ascii_trie[ascii_lower] = []
+                        self.ascii_trie[ascii_lower].append(city_id)
                 
                 logger.info(f"Loaded {len(self.city_index)} cities into memory")
         except Exception as e:
@@ -179,6 +260,55 @@ class CityRepository(BaseRepository):
             logger.error(f"Error getting city by ID: {str(e)}")
             return None
     
+    def _get_prefix_matches(self, query: str, country: Optional[str] = None) -> List[int]:
+        """
+        Get city IDs that match the prefix using the appropriate data structure.
+        
+        Args:
+            query: The prefix to match
+            country: Optional country filter
+            
+        Returns:
+            List of city IDs that match the prefix
+        """
+        if not query:
+            return []
+            
+        prefix_match_ids = []
+        query = query.lower()
+        
+        if USING_TRIE:
+            # Use trie for efficient prefix matching
+            try:
+                # Get all items with the prefix
+                name_matches = self.name_trie.items(prefix=query)
+                for _, ids in name_matches:
+                    prefix_match_ids.extend(ids)
+                    
+                ascii_matches = self.ascii_trie.items(prefix=query)
+                for _, ids in ascii_matches:
+                    prefix_match_ids.extend(ids)
+            except KeyError:
+                # No matches found in the trie
+                pass
+        else:
+            # Fall back to dictionary lookup
+            for name, ids in self.city_names.items():
+                if name.startswith(query):
+                    prefix_match_ids.extend(ids)
+            
+            for name, ids in self.ascii_names.items():
+                if name.startswith(query):
+                    prefix_match_ids.extend(ids)
+        
+        # Filter by country if needed
+        if country:
+            country_lower = country.lower()
+            prefix_match_ids = [city_id for city_id in prefix_match_ids 
+                             if self.city_index[city_id]['country'].lower() == country_lower]
+                
+        return list(set(prefix_match_ids))
+    
     @lru_cache(maxsize=5000)
     def search(
         self, 
@@ -188,7 +318,7 @@ class CityRepository(BaseRepository):
         user_lat: Optional[float] = None,
         user_lng: Optional[float] = None,
         user_country: Optional[str] = None,
-        fuzzy_threshold: int = 70
+        fuzzy_threshold: int = 70  # Increased from 70 to 85 for better performance
     ) -> List[Dict[str, Any]]:
         """
         Search for cities by name with autocomplete, fuzzy matching, and location-aware support.
@@ -211,6 +341,7 @@ class CityRepository(BaseRepository):
             
         try:
             query = query.strip().lower()
+            start_time = time.time()
             logger.info(f"Searching for cities with query: '{query}', country: {country}, user_country: {user_country}")
             
             # Get city IDs to search (filtered by country if provided)
@@ -238,26 +369,54 @@ class CityRepository(BaseRepository):
                 exact_match_ids = [city_id for city_id in exact_match_ids 
                                  if self.city_index[city_id]['country'].lower() == country_lower]
             
-            # Prefix matches (cities that start with the query)
-            prefix_match_ids = []
+            # Get prefix matches using the optimized method
+            prefix_match_ids = self._get_prefix_matches(query, country)
             
-            # Check each city name and ASCII name for prefix match
-            for name, ids in self.city_names.items():
-                if name.startswith(query) and (not country or any(self.city_index[city_id]['country'].lower() == country.lower() for city_id in ids)):
-                    prefix_match_ids.extend(ids)
+            # Remove exact matches from prefix matches
+            prefix_match_ids = [city_id for city_id in prefix_match_ids if city_id not in exact_match_ids]
             
-            for name, ids in self.ascii_names.items():
-                if name.startswith(query) and (not country or any(self.city_index[city_id]['country'].lower() == country.lower() for city_id in ids)):
-                    prefix_match_ids.extend(ids)
+            # Early return if we have enough exact and prefix matches
+            exact_and_prefix_count = len(exact_match_ids) + len(prefix_match_ids)
             
-            # Deduplicate and remove exact matches
-            prefix_match_ids = list(set([city_id for city_id in prefix_match_ids if city_id not in exact_match_ids]))
+            # If we already have at least 5 matches or the query is very short, skip fuzzy matching
+            skip_fuzzy = exact_and_prefix_count >= 5 or len(query) <= 2
+            
+            # Check if we can return early (avoid expensive fuzzy matching)
+            if skip_fuzzy and exact_and_prefix_count > 0:
+                # Create result objects
+                results = []
+                
+                # Add exact matches first
+                for city_id in exact_match_ids:
+                    city = self.city_index[city_id].copy()
+                    city['match_type'] = 'exact'
+                    results.append(city)
+                
+                # Add prefix matches
+                for city_id in prefix_match_ids:
+                    city = self.city_index[city_id].copy()
+                    city['match_type'] = 'prefix'
+                    results.append(city)
+                
+                # Apply location-based prioritization if needed
+                results = self._apply_location_prioritization(
+                    results, user_lat, user_lng, user_country
+                )
+                
+                # Clean up before returning
+                for city in results:
+                    city.pop('match_type', None)
+                    city.pop('fuzzy_score', None)
+                
+                elapsed = time.time() - start_time
+                logger.info(f"Search completed in {elapsed*1000:.1f}ms (skipped fuzzy matching)")
+                return results[:limit]
             
             # Apply fuzzy matching if needed
             fuzzy_match_results = []
             
-            # Only do expensive fuzzy matching if we don't have enough exact/prefix matches
-            if len(exact_match_ids) + len(prefix_match_ids) < limit * 2 and len(query) > 2:
+            # Only do expensive fuzzy matching if we need to and the query is meaningful
+            if not skip_fuzzy and len(query) > 2:
                 # Candidates to search - either country-filtered or all names
                 search_names = []
                 
@@ -290,7 +449,7 @@ class CityRepository(BaseRepository):
                     names_only, 
                     limit=min(100, len(names_only)), 
                     scorer=fuzz.token_set_ratio,
-                    score_cutoff=fuzzy_threshold
+                    score_cutoff=fuzzy_threshold  # Using higher threshold (was 70)
                 )
                 
                 # Convert fuzzy match results to city IDs with scores
@@ -325,82 +484,112 @@ class CityRepository(BaseRepository):
                 results.append(city)
             
             # Apply location-based prioritization
-            if (user_lat is not None and user_lng is not None) or user_country is not None:
-                # Flag to check if we need to sort by multiple criteria
-                has_geo_sort = user_lat is not None and user_lng is not None
-                has_country_sort = user_country is not None
-                
-                logger.info(f"Applying location prioritization to {len(results)} results")
-                
-                # Function to calculate city score based on location
-                def city_score(city):
-                    score = 0
-                    
-                    # Scoring by match type
-                    if city.get('match_type') == 'exact':
-                        score += 100000
-                    elif city.get('match_type') == 'prefix':
-                        score += 50000
-                    
-                    # Add fuzzy match score if present
-                    if 'fuzzy_score' in city:
-                        # Scale the fuzzy score and apply higher weight
-                        fuzzy_value = city['fuzzy_score'] * 200
-                        
-                        # Extra boost for high fuzzy scores (> 80)
-                        if city['fuzzy_score'] > 80:
-                            fuzzy_value *= 1.5
-                        
-                        score += fuzzy_value
-                    
-                    # Country match
-                    if has_country_sort and city['country'].lower() == user_country.lower():
-                        score += 25000
-                    
-                    # Distance to user
-                    if has_geo_sort:
-                        # Calculate distance using Haversine formula
-                        city_lat = city['lat']
-                        city_lng = city['lng']
-                        distance = self._haversine(user_lat, user_lng, city_lat, city_lng)
-                        
-                        # Convert distance to a score (closer = higher score)
-                        distance_score = 50000 / (1 + (distance / 50))
-                        score += distance_score
-                        
-                        # Store distance for reference
-                        city['distance_km'] = distance
-                    
-                    return -score  # Negative for descending sort (higher score = better match)
-                
-                # Sort the results by the combined score
-                results.sort(key=city_score)
-            else:
-                # Simple sorting by match type if no location info
-                def simple_score(city):
-                    if city.get('match_type') == 'exact':
-                        base_score = 1000
-                    elif city.get('match_type') == 'prefix':
-                        base_score = 500
-                    else:
-                        base_score = 0
-                    
-                    # Add fuzzy score if present
-                    fuzzy_score = city.get('fuzzy_score', 0)
-                    return -(base_score + fuzzy_score)  # Negative for descending sort
-                
-                results.sort(key=simple_score)
+            results = self._apply_location_prioritization(
+                results, user_lat, user_lng, user_country
+            )
             
             # Clean up before returning
             for city in results:
                 city.pop('match_type', None)
                 city.pop('fuzzy_score', None)
             
-                return results[:limit]
+            elapsed = time.time() - start_time
+            logger.info(f"Search completed in {elapsed*1000:.1f}ms with {len(fuzzy_match_results)} fuzzy matches")
+            
+            return results[:limit]
         
         except Exception as e:
             logger.error(f"Error searching cities: {str(e)}", exc_info=True)
             return []
+            
+    def _apply_location_prioritization(
+        self, 
+        results: List[Dict[str, Any]], 
+        user_lat: Optional[float] = None,
+        user_lng: Optional[float] = None,
+        user_country: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Apply location-based prioritization to the results.
+        
+        Args:
+            results: List of city dictionaries to prioritize
+            user_lat: User's latitude
+            user_lng: User's longitude
+            user_country: User's country
+            
+        Returns:
+            Sorted list of cities
+        """
+        if not results:
+            return []
+            
+        # Check if we need location-based sorting
+        if (user_lat is not None and user_lng is not None) or user_country is not None:
+            # Flag to check if we need to sort by multiple criteria
+            has_geo_sort = user_lat is not None and user_lng is not None
+            has_country_sort = user_country is not None
+            
+            # Function to calculate city score based on location
+            def city_score(city):
+                score = 0
+                
+                # Scoring by match type
+                if city.get('match_type') == 'exact':
+                    score += 100000
+                elif city.get('match_type') == 'prefix':
+                    score += 50000
+                
+                # Add fuzzy match score if present
+                if 'fuzzy_score' in city:
+                    # Scale the fuzzy score and apply higher weight
+                    fuzzy_value = city['fuzzy_score'] * 200
+                    
+                    # Extra boost for high fuzzy scores (> 80)
+                    if city['fuzzy_score'] > 80:
+                        fuzzy_value *= 1.5
+                    
+                    score += fuzzy_value
+                
+                # Country match
+                if has_country_sort and city['country'].lower() == user_country.lower():
+                    score += 25000
+                
+                # Distance to user
+                if has_geo_sort:
+                    # Calculate distance using Haversine formula
+                    city_lat = city['lat']
+                    city_lng = city['lng']
+                    distance = self._haversine(user_lat, user_lng, city_lat, city_lng)
+                    
+                    # Convert distance to a score (closer = higher score)
+                    distance_score = 50000 / (1 + (distance / 50))
+                    score += distance_score
+                    
+                    # Store distance for reference
+                    city['distance_km'] = distance
+                
+                return -score  # Negative for descending sort (higher score = better match)
+            
+            # Sort the results by the combined score
+            results.sort(key=city_score)
+        else:
+            # Simple sorting by match type if no location info
+            def simple_score(city):
+                if city.get('match_type') == 'exact':
+                    base_score = 1000
+                elif city.get('match_type') == 'prefix':
+                    base_score = 500
+                else:
+                    base_score = 0
+                
+                # Add fuzzy score if present
+                fuzzy_score = city.get('fuzzy_score', 0)
+                return -(base_score + fuzzy_score)  # Negative for descending sort
+            
+            results.sort(key=simple_score)
+        
+        return results
 
     def _haversine(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
         """
@@ -427,6 +616,219 @@ class CityRepository(BaseRepository):
         r = 6371  # Radius of earth in kilometers
         
         return c * r
+
+    async def search_async(
+        self, 
+        query: str, 
+        limit: int = 10, 
+        country: Optional[str] = None,
+        user_lat: Optional[float] = None,
+        user_lng: Optional[float] = None,
+        user_country: Optional[str] = None,
+        fuzzy_threshold: int = 85,
+        callback = None
+    ):
+        """
+        Asynchronous search for cities with tiered response.
+        
+        This method returns exact and prefix matches immediately, then performs
+        fuzzy matching asynchronously, calling the callback with updated results
+        when fuzzy matching completes.
+        
+        Args:
+            query: The search query (city name prefix)
+            limit: Maximum number of results to return
+            country: Optional country filter
+            user_lat: User's latitude for location-aware prioritization
+            user_lng: User's longitude for location-aware prioritization
+            user_country: User's country for location-aware prioritization
+            fuzzy_threshold: Minimum similarity score for fuzzy matching (0-100)
+            callback: Optional callback function to receive updated results after fuzzy matching
+            
+        Returns:
+            Initial list of exact/prefix matches (without fuzzy matches)
+        """
+        if not query:
+            return []
+            
+        try:
+            query = query.strip().lower()
+            start_time = time.time()
+            logger.info(f"Starting async search with query: '{query}'")
+            
+            # Get exact matches
+            exact_match_ids = []
+            if query in self.city_names:
+                exact_match_ids.extend(self.city_names[query])
+            if query in self.ascii_names:
+                exact_match_ids.extend(self.ascii_names[query])
+            
+            # Ensure we only have unique IDs
+            exact_match_ids = list(set(exact_match_ids))
+            
+            # Filter by country if needed
+            if country and exact_match_ids:
+                country_lower = country.lower()
+                exact_match_ids = [city_id for city_id in exact_match_ids 
+                                 if self.city_index[city_id]['country'].lower() == country_lower]
+            
+            # Get prefix matches
+            prefix_match_ids = self._get_prefix_matches(query, country)
+            
+            # Remove exact matches from prefix matches
+            prefix_match_ids = [city_id for city_id in prefix_match_ids if city_id not in exact_match_ids]
+            
+            # Prepare initial results (exact + prefix matches)
+            initial_results = []
+            
+            # Add exact matches first
+            for city_id in exact_match_ids:
+                city = self.city_index[city_id].copy()
+                city['match_type'] = 'exact'
+                initial_results.append(city)
+            
+            # Add prefix matches
+            for city_id in prefix_match_ids:
+                city = self.city_index[city_id].copy()
+                city['match_type'] = 'prefix'
+                initial_results.append(city)
+            
+            # Apply location prioritization to initial results
+            initial_results = self._apply_location_prioritization(
+                initial_results, user_lat, user_lng, user_country
+            )
+            
+            # Clean up before returning
+            for city in initial_results:
+                city.pop('match_type', None)
+                city.pop('fuzzy_score', None)
+            
+            initial_result_count = len(initial_results)
+            elapsed = time.time() - start_time
+            logger.info(f"Initial results ready in {elapsed*1000:.1f}ms: {initial_result_count} matches")
+            
+            # If we have enough initial results or query is very short, skip fuzzy matching
+            if initial_result_count >= limit or len(query) <= 2:
+                logger.info("Skipping fuzzy matching - enough initial results")
+                return initial_results[:limit]
+            
+            # Start fuzzy matching in the background if we need more results
+            if callback:
+                asyncio.create_task(self._perform_fuzzy_matching(
+                    query, country, exact_match_ids, prefix_match_ids, 
+                    user_lat, user_lng, user_country, fuzzy_threshold, 
+                    limit, callback, start_time
+                ))
+            
+            # Return the initial results immediately
+            return initial_results[:limit]
+            
+        except Exception as e:
+            logger.error(f"Error in async search: {str(e)}", exc_info=True)
+            return []
+    
+    async def _perform_fuzzy_matching(
+        self, query, country, exact_match_ids, prefix_match_ids,
+        user_lat, user_lng, user_country, fuzzy_threshold, 
+        limit, callback, start_time
+    ):
+        """
+        Perform fuzzy matching asynchronously and call the callback with updated results.
+        """
+        try:
+            # Perform fuzzy matching
+            fuzzy_match_results = []
+            
+            # Candidates to search - either country-filtered or all names
+            search_names = []
+            
+            if country:
+                # Get all city names for the specified country
+                country_lower = country.lower()
+                for city_id in self.country_cities.get(country_lower, []):
+                    city = self.city_index[city_id]
+                    search_names.append((city['name'].lower(), city_id))
+                    search_names.append((city['ascii_name'].lower(), city_id))
+            else:
+                # Use all names (could be expensive for large datasets)
+                for name, ids in self.city_names.items():
+                    for city_id in ids:
+                        search_names.append((name, city_id))
+                
+                for name, ids in self.ascii_names.items():
+                    for city_id in ids:
+                        search_names.append((name, city_id))
+            
+            # Remove duplicates
+            search_names = list(set(search_names))
+            
+            # Extract just the names for fuzzy matching
+            names_only = [name for name, _ in search_names]
+            
+            # Run the CPU-intensive fuzzy matching in a thread pool
+            def run_fuzzy_matching():
+                return process.extract(
+                    query, 
+                    names_only, 
+                    limit=min(100, len(names_only)), 
+                    scorer=fuzz.token_set_ratio,
+                    score_cutoff=fuzzy_threshold
+                )
+            
+            # Run the fuzzy matching in a thread pool to avoid blocking the event loop
+            loop = asyncio.get_event_loop()
+            fuzzy_matches = await loop.run_in_executor(None, run_fuzzy_matching)
+            
+            # Convert fuzzy match results to city IDs with scores
+            for matched_name, score, idx in fuzzy_matches:
+                city_id = search_names[idx][1]
+                # Skip cities already in exact or prefix matches
+                if city_id in exact_match_ids or city_id in prefix_match_ids:
+                    continue
+                
+                city = self.city_index[city_id].copy()
+                city['fuzzy_score'] = score
+                city['match_type'] = 'fuzzy'
+                fuzzy_match_results.append(city)
+            
+            # Combine all results
+            combined_results = []
+            
+            # Add exact matches first
+            for city_id in exact_match_ids:
+                city = self.city_index[city_id].copy()
+                city['match_type'] = 'exact'
+                combined_results.append(city)
+            
+            # Add prefix matches
+            for city_id in prefix_match_ids:
+                city = self.city_index[city_id].copy()
+                city['match_type'] = 'prefix'
+                combined_results.append(city)
+            
+            # Add fuzzy matches
+            combined_results.extend(fuzzy_match_results)
+            
+            # Apply location prioritization
+            combined_results = self._apply_location_prioritization(
+                combined_results, user_lat, user_lng, user_country
+            )
+            
+            # Clean up before returning
+            for city in combined_results:
+                city.pop('match_type', None)
+                city.pop('fuzzy_score', None)
+            
+            elapsed = time.time() - start_time
+            logger.info(f"Fuzzy matching completed in {elapsed*1000:.1f}ms: {len(fuzzy_match_results)} fuzzy matches")
+            
+            # Call the callback with the final results
+            callback(combined_results[:limit])
+            
+        except Exception as e:
+            logger.error(f"Error in fuzzy matching: {str(e)}", exc_info=True)
+            # Call the callback with the original results in case of error
+            callback([])
 
 class GeoRepository(BaseRepository):
     """

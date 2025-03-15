@@ -13,6 +13,7 @@ import click
 
 from GeoDash.data import CityData
 from GeoDash.api.server import start_server
+from GeoDash.utils import log_error_with_github_info
 
 # Configure logging
 logging.basicConfig(
@@ -186,7 +187,8 @@ def table_info_command(db_uri):
 def server_command(host, port, debug, db_uri):
     """Start the GeoDash API server."""
     try:
-        logger.info(f"Starting server on {host}:{port}")
+        logger.info(f"Starting GeoDash API server at {host}:{port}")
+        
         start_server(
             host=host,
             port=port,
@@ -195,7 +197,7 @@ def server_command(host, port, debug, db_uri):
         )
         return 0
     except Exception as e:
-        logger.error(f"Error starting server: {str(e)}")
+        log_error_with_github_info(e, "Error starting server")
         return 1
 
 def main():
@@ -203,7 +205,7 @@ def main():
     try:
         return cli()
     except Exception as e:
-        logger.error(f"Error: {str(e)}")
+        log_error_with_github_info(e, "Error in CLI command")
         return 1
 
 if __name__ == '__main__':

@@ -27,11 +27,13 @@ def main():
         from GeoDash.cli.commands import main as cli_main
         cli_main()
     except ImportError as e:
-        logger.error(f"Failed to import CLI module: {str(e)}")
+        from GeoDash.utils import log_error_with_github_info
+        log_error_with_github_info(e, "Failed to import CLI module")
         sys.exit(1)
     except Exception as e:
-        logger.error(f"Error running GeoDash: {str(e)}")
+        from GeoDash.utils import log_error_with_github_info
+        log_error_with_github_info(e, "Error running GeoDash")
         sys.exit(1)
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main() 

@@ -13,7 +13,11 @@ from functools import lru_cache
 from GeoDash.data.database import DatabaseManager
 from GeoDash.data.schema import SchemaManager
 from GeoDash.data.importer import CityDataImporter
-from GeoDash.data.repositories import CityRepository, GeoRepository, RegionRepository
+from GeoDash.data.repositories import (
+    get_city_repository, 
+    get_geo_repository, 
+    get_region_repository
+)
 
 # Configure logging
 logging.basicConfig(
@@ -50,9 +54,10 @@ class CityData:
         self.schema_manager = SchemaManager(self.db_manager)
         self.data_importer = CityDataImporter(self.db_manager)
         
-        self.city_repository = CityRepository(self.db_manager)
-        self.geo_repository = GeoRepository(self.db_manager)
-        self.region_repository = RegionRepository(self.db_manager)
+        # Use the singleton repository pattern to avoid loading cities multiple times
+        self.city_repository = get_city_repository(self.db_manager)
+        self.geo_repository = get_geo_repository(self.db_manager)
+        self.region_repository = get_region_repository(self.db_manager)
         
         # Ensure the schema exists
         self.schema_manager.ensure_schema_exists()

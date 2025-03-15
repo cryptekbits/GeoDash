@@ -13,6 +13,7 @@ from typing import Optional, Any, Dict, Tuple, List
 from contextlib import contextmanager
 from pathlib import Path
 import time
+from GeoDash.utils import log_error_with_github_info
 
 # Configure logging
 logging.basicConfig(
@@ -89,10 +90,12 @@ class DatabaseManager:
                     self.conn = psycopg2.connect(self.db_uri.replace('postgresql://', ''))
                     self.db_type = 'postgresql'
                 except ImportError:
-                    logger.error("psycopg2 is not installed. Please install it to use PostgreSQL.")
+                    log_error_with_github_info(ImportError("psycopg2 is not installed"), "Database connection error")
                     raise
             else:
-                raise ValueError(f"Unsupported database URI: {self.db_uri}")
+                error = ValueError(f"Unsupported database URI: {self.db_uri}")
+                log_error_with_github_info(error, "Database connection error")
+                raise error
             
             # Enable foreign keys for SQLite
             if self.db_type == 'sqlite':
@@ -101,7 +104,7 @@ class DatabaseManager:
                 self.conn.execute("PRAGMA journal_mode = WAL")
                 self.conn.execute("PRAGMA synchronous = NORMAL")
         except Exception as e:
-            logger.error(f"Failed to connect to database: {str(e)}")
+            log_error_with_github_info(e, "Failed to connect to database")
             raise
             
     @contextmanager
@@ -126,7 +129,7 @@ class DatabaseManager:
                 self.conn.commit()
             except Exception as e:
                 self.conn.rollback()
-                logger.error(f"Database operation failed: {str(e)}")
+                log_error_with_github_info(e, "Database operation failed")
                 raise
             finally:
                 cursor.close()
