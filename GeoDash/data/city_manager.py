@@ -30,13 +30,12 @@ class CityData:
     a unified interface for city data operations.
     """
     
-    def __init__(self, db_uri: str = None, auto_import: bool = True):
+    def __init__(self, db_uri: str = None):
         """
         Initialize the CityData manager.
         
         Args:
             db_uri: Database URI to connect to. If None, uses SQLite in the data directory.
-            auto_import: If True, automatically import city data if the database is empty.
         """
         # If no URI provided, use SQLite in data directory
         if db_uri is None:
@@ -58,22 +57,19 @@ class CityData:
         # Ensure the schema exists
         self.schema_manager.ensure_schema_exists()
         
-        # Check if database is empty and try to import data if needed and auto_import is True
-        if auto_import:
+        # Check if database is empty and try to import data if needed
+        try:
+            count = self.get_table_info()['count']
+            if count == 0:
+                logger.info("Database is empty. Attempting to import city data...")
+                self.import_city_data()
+        except Exception as e:
+            logger.warning(f"Error checking database content: {e}. Will try to import data if needed.")
+            # Try to import data anyway
             try:
-                count = self.get_table_info()['count']
-                if count == 0:
-                    logger.info("Database is empty. Attempting to import city data...")
-                    self.import_city_data()
-            except Exception as e:
-                logger.warning(f"Error checking database content: {e}. Will try to import data if needed.")
-                # Try to import data anyway
-                try:
-                    self.import_city_data()
-                except Exception as import_err:
-                    logger.error(f"Failed to import city data during initialization: {import_err}")
-        else:
-            logger.info("Auto-import is disabled. Skipping initial data import.")
+                self.import_city_data()
+            except Exception as import_err:
+                logger.error(f"Failed to import city data during initialization: {import_err}")
     
     def import_city_data(self, csv_path: str = None, batch_size: int = 5000) -> bool:
         """

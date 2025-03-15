@@ -125,61 +125,145 @@ class CityRepository(BaseRepository):
             query = query.strip().lower()
             
             with self.db_manager.cursor() as cursor:
-                if self.db_manager.db_type == 'sqlite':
-                    # For SQLite, optimize for prefix matches
-                    if country:
-                        cursor.execute("""
-                            SELECT id, name, ascii_name, country, country_code, state, state_code, lat, lng, population
-                            FROM city_data
-                            WHERE (LOWER(ascii_name) LIKE ? OR LOWER(name) LIKE ?) AND LOWER(country) = ?
-                            ORDER BY 
-                                CASE WHEN LOWER(ascii_name) LIKE ? THEN 1
-                                     WHEN LOWER(name) LIKE ? THEN 1
-                                     ELSE 2 END,
-                                population DESC NULLS LAST
-                            LIMIT ?
-                        """, (f"{query}%", f"{query}%", country.lower(), f"{query}%", f"{query}%", limit))
-                    else:
-                        cursor.execute("""
-                            SELECT id, name, ascii_name, country, country_code, state, state_code, lat, lng, population
-                            FROM city_data
-                            WHERE LOWER(ascii_name) LIKE ? OR LOWER(name) LIKE ?
-                            ORDER BY 
-                                CASE WHEN LOWER(ascii_name) LIKE ? THEN 1
-                                     WHEN LOWER(name) LIKE ? THEN 1
-                                     ELSE 2 END,
-                                population DESC NULLS LAST
-                            LIMIT ?
-                        """, (f"{query}%", f"{query}%", f"{query}%", f"{query}%", limit))
-                else:  # PostgreSQL
-                    # For PostgreSQL, use more advanced text search capabilities
-                    if country:
-                        cursor.execute("""
-                            SELECT id, name, ascii_name, country, country_code, state, state_code, lat, lng, population
-                            FROM city_data
-                            WHERE (LOWER(ascii_name) LIKE %s OR LOWER(name) LIKE %s) AND LOWER(country) = %s
-                            ORDER BY 
-                                CASE WHEN LOWER(ascii_name) LIKE %s THEN 1
-                                     WHEN LOWER(name) LIKE %s THEN 1
-                                     ELSE 2 END,
-                                population DESC NULLS LAST
-                            LIMIT %s
-                        """, (f"{query}%", f"{query}%", country.lower(), f"{query}%", f"{query}%", limit))
-                    else:
-                        cursor.execute("""
-                            SELECT id, name, ascii_name, country, country_code, state, state_code, lat, lng, population
-                            FROM city_data
-                            WHERE LOWER(ascii_name) LIKE %s OR LOWER(name) LIKE %s
-                            ORDER BY 
-                                CASE WHEN LOWER(ascii_name) LIKE %s THEN 1
-                                     WHEN LOWER(name) LIKE %s THEN 1
-                                     ELSE 2 END,
-                                population DESC NULLS LAST
-                            LIMIT %s
-                        """, (f"{query}%", f"{query}%", f"{query}%", f"{query}%", limit))
-                
                 columns = ['id', 'name', 'ascii_name', 'country', 'country_code', 
                           'state', 'state_code', 'lat', 'lng', 'population']
+                
+                if self.db_manager.db_type == 'sqlite':
+                    # Check if FTS5 is available and the city_search table exists
+                    has_fts = False
+                    try:
+                        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='city_search'")
+                        has_fts = bool(cursor.fetchone())
+                    except Exception:
+                        has_fts = False
+                    
+                    if has_fts:
+                        # Use FTS5 for full-text search
+                        # Build the search query
+                        search_term = f"{query}*"  # Add wildcard for prefix matching
+                        
+                        if country:
+                            # Use FTS with country filter
+                            cursor.execute(f"""
+                                SELECT c.id, c.name, c.ascii_name, c.country, c.country_code, 
+                                       c.state, c.state_code, c.lat, c.lng, c.population
+                                FROM city_data c
+                                JOIN city_search s ON c.id = s.rowid
+                                WHERE city_search MATCH ? AND LOWER(c.country) = ?
+                                ORDER BY rank, c.population DESC NULLS LAST
+                                LIMIT ?
+                            """, (search_term, country.lower(), limit))
+                        else:
+                            # Use FTS without country filter
+                            cursor.execute(f"""
+                                SELECT c.id, c.name, c.ascii_name, c.country, c.country_code, 
+                                       c.state, c.state_code, c.lat, c.lng, c.population
+                                FROM city_data c
+                                JOIN city_search s ON c.id = s.rowid
+                                WHERE city_search MATCH ?
+                                ORDER BY rank, c.population DESC NULLS LAST
+                                LIMIT ?
+                            """, (search_term, limit))
+                    else:
+                        # Fall back to LIKE queries if FTS is not available
+                        if country:
+                            cursor.execute("""
+                                SELECT id, name, ascii_name, country, country_code, state, state_code, lat, lng, population
+                                FROM city_data
+                                WHERE (LOWER(ascii_name) LIKE ? OR LOWER(name) LIKE ?) AND LOWER(country) = ?
+                                ORDER BY 
+                                    CASE WHEN LOWER(ascii_name) LIKE ? THEN 1
+                                         WHEN LOWER(name) LIKE ? THEN 1
+                                         ELSE 2 END,
+                                    population DESC NULLS LAST
+                                LIMIT ?
+                            """, (f"{query}%", f"{query}%", country.lower(), f"{query}%", f"{query}%", limit))
+                        else:
+                            cursor.execute("""
+                                SELECT id, name, ascii_name, country, country_code, state, state_code, lat, lng, population
+                                FROM city_data
+                                WHERE LOWER(ascii_name) LIKE ? OR LOWER(name) LIKE ?
+                                ORDER BY 
+                                    CASE WHEN LOWER(ascii_name) LIKE ? THEN 1
+                                         WHEN LOWER(name) LIKE ? THEN 1
+                                         ELSE 2 END,
+                                    population DESC NULLS LAST
+                                LIMIT ?
+                            """, (f"{query}%", f"{query}%", f"{query}%", f"{query}%", limit))
+                else:  # PostgreSQL
+                    # Check if the tsvector column exists
+                    has_tsvector = False
+                    try:
+                        cursor.execute("""
+                            SELECT column_name FROM information_schema.columns 
+                            WHERE table_name = 'city_data' AND column_name = 'search_vector'
+                        """)
+                        has_tsvector = bool(cursor.fetchone())
+                    except Exception:
+                        has_tsvector = False
+                    
+                    if has_tsvector:
+                        # Use the tsvector column for full-text search
+                        # Create tsquery for the search term
+                        # Convert query to tsquery format with prefix matching
+                        tsquery = f"{query}:*"
+                        
+                        if country:
+                            cursor.execute("""
+                                SELECT id, name, ascii_name, country, country_code, state, state_code, lat, lng, population,
+                                       ts_rank(search_vector, to_tsquery('english', %s)) as rank
+                                FROM city_data
+                                WHERE search_vector @@ to_tsquery('english', %s) AND LOWER(country) = %s
+                                ORDER BY rank DESC, population DESC NULLS LAST
+                                LIMIT %s
+                            """, (tsquery, tsquery, country.lower(), limit))
+                        else:
+                            cursor.execute("""
+                                SELECT id, name, ascii_name, country, country_code, state, state_code, lat, lng, population,
+                                       ts_rank(search_vector, to_tsquery('english', %s)) as rank
+                                FROM city_data
+                                WHERE search_vector @@ to_tsquery('english', %s)
+                                ORDER BY rank DESC, population DESC NULLS LAST
+                                LIMIT %s
+                            """, (tsquery, tsquery, limit))
+                        
+                        # Add rank to columns and then remove it from results
+                        temp_columns = columns + ['rank']
+                        rows = cursor.fetchall()
+                        result = self._rows_to_dicts(rows, temp_columns)
+                        
+                        # Remove the rank field from the results
+                        for city in result:
+                            city.pop('rank', None)
+                        
+                        return result
+                    else:
+                        # Fall back to LIKE queries if tsvector is not available
+                        if country:
+                            cursor.execute("""
+                                SELECT id, name, ascii_name, country, country_code, state, state_code, lat, lng, population
+                                FROM city_data
+                                WHERE (LOWER(ascii_name) LIKE %s OR LOWER(name) LIKE %s) AND LOWER(country) = %s
+                                ORDER BY 
+                                    CASE WHEN LOWER(ascii_name) LIKE %s THEN 1
+                                         WHEN LOWER(name) LIKE %s THEN 1
+                                         ELSE 2 END,
+                                    population DESC NULLS LAST
+                                LIMIT %s
+                            """, (f"{query}%", f"{query}%", country.lower(), f"{query}%", f"{query}%", limit))
+                        else:
+                            cursor.execute("""
+                                SELECT id, name, ascii_name, country, country_code, state, state_code, lat, lng, population
+                                FROM city_data
+                                WHERE LOWER(ascii_name) LIKE %s OR LOWER(name) LIKE %s
+                                ORDER BY 
+                                    CASE WHEN LOWER(ascii_name) LIKE %s THEN 1
+                                         WHEN LOWER(name) LIKE %s THEN 1
+                                         ELSE 2 END,
+                                    population DESC NULLS LAST
+                                LIMIT %s
+                            """, (f"{query}%", f"{query}%", f"{query}%", f"{query}%", limit))
+                
                 rows = cursor.fetchall()
                 return self._rows_to_dicts(rows, columns)
         

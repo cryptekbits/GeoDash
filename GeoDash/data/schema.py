@@ -49,6 +49,7 @@ class SchemaManager:
         """
         self._create_city_table()
         self._create_city_indexes()
+        self._create_search_optimizations()
         logger.info("Schema creation complete.")
     
     def _create_city_table(self):
@@ -122,6 +123,132 @@ class SchemaManager:
                     logger.info("Created PostGIS spatial index")
             except Exception as e:
                 logger.warning(f"Could not create PostGIS spatial index: {str(e)}")
+                
+    def _create_search_optimizations(self):
+        """
+        Create full-text search optimizations for each database type.
+        For SQLite: Create an FTS5 virtual table
+        For PostgreSQL: Add tsvector column with GIN index
+        """
+        if self.db_manager.db_type == 'sqlite':
+            # Create an FTS5 virtual table for SQLite
+            try:
+                # Check if FTS5 is available
+                has_fts5 = False
+                with self.db_manager.cursor() as cursor:
+                    cursor.execute("SELECT sqlite_compileoption_used('ENABLE_FTS5')")
+                    has_fts5 = bool(cursor.fetchone()[0])
+                
+                if has_fts5:
+                    # Create FTS5 virtual table
+                    with self.db_manager.cursor() as cursor:
+                        cursor.execute("""
+                        CREATE VIRTUAL TABLE IF NOT EXISTS city_search USING fts5(
+                            id UNINDEXED,
+                            name, 
+                            ascii_name,
+                            country,
+                            state,
+                            content='city_data',
+                            content_rowid='id'
+                        )
+                        """)
+                        
+                        # Populate the FTS5 table with existing data
+                        cursor.execute("""
+                        INSERT INTO city_search(rowid, name, ascii_name, country, state)
+                        SELECT id, name, ascii_name, country, state FROM city_data
+                        """)
+                        
+                        # Create triggers to keep the FTS table in sync with the main table
+                        cursor.execute("""
+                        CREATE TRIGGER IF NOT EXISTS city_data_ai AFTER INSERT ON city_data BEGIN
+                            INSERT INTO city_search(rowid, name, ascii_name, country, state)
+                            VALUES (new.id, new.name, new.ascii_name, new.country, new.state);
+                        END;
+                        """)
+                        
+                        cursor.execute("""
+                        CREATE TRIGGER IF NOT EXISTS city_data_ad AFTER DELETE ON city_data BEGIN
+                            INSERT INTO city_search(city_search, rowid, name, ascii_name, country, state)
+                            VALUES ('delete', old.id, old.name, old.ascii_name, old.country, old.state);
+                        END;
+                        """)
+                        
+                        cursor.execute("""
+                        CREATE TRIGGER IF NOT EXISTS city_data_au AFTER UPDATE ON city_data BEGIN
+                            INSERT INTO city_search(city_search, rowid, name, ascii_name, country, state)
+                            VALUES ('delete', old.id, old.name, old.ascii_name, old.country, old.state);
+                            INSERT INTO city_search(rowid, name, ascii_name, country, state)
+                            VALUES (new.id, new.name, new.ascii_name, new.country, new.state);
+                        END;
+                        """)
+                    
+                    logger.info("Created FTS5 virtual table for city search")
+                else:
+                    logger.warning("FTS5 is not available in this SQLite build. Falling back to LIKE queries.")
+            except Exception as e:
+                logger.warning(f"Could not create FTS5 virtual table: {str(e)}")
+                
+        elif self.db_manager.db_type == 'postgresql':
+            # Add tsvector column and GIN index for PostgreSQL
+            try:
+                with self.db_manager.cursor() as cursor:
+                    # Check if the tsvector column already exists
+                    cursor.execute(f"""
+                    SELECT column_name FROM information_schema.columns 
+                    WHERE table_name = '{self.city_table_name}' AND column_name = 'search_vector'
+                    """)
+                    if not cursor.fetchone():
+                        # Add the tsvector column
+                        cursor.execute(f"""
+                        ALTER TABLE {self.city_table_name} 
+                        ADD COLUMN search_vector tsvector
+                        """)
+                        
+                        # Populate the tsvector column
+                        cursor.execute(f"""
+                        UPDATE {self.city_table_name} 
+                        SET search_vector = to_tsvector('english', 
+                            coalesce(name,'') || ' ' || 
+                            coalesce(ascii_name,'') || ' ' || 
+                            coalesce(country,'') || ' ' || 
+                            coalesce(state,'')
+                        )
+                        """)
+                        
+                        # Create GIN index on the tsvector column
+                        cursor.execute(f"""
+                        CREATE INDEX idx_city_search ON {self.city_table_name} 
+                        USING GIN(search_vector)
+                        """)
+                        
+                        # Create trigger to keep the tsvector column up to date
+                        cursor.execute(f"""
+                        CREATE OR REPLACE FUNCTION city_search_trigger() RETURNS trigger AS $$
+                        BEGIN
+                            NEW.search_vector = to_tsvector('english', 
+                                coalesce(NEW.name,'') || ' ' || 
+                                coalesce(NEW.ascii_name,'') || ' ' || 
+                                coalesce(NEW.country,'') || ' ' || 
+                                coalesce(NEW.state,'')
+                            );
+                            RETURN NEW;
+                        END
+                        $$ LANGUAGE plpgsql;
+                        """)
+                        
+                        cursor.execute(f"""
+                        CREATE TRIGGER tsvector_update_trigger BEFORE INSERT OR UPDATE
+                        ON {self.city_table_name} FOR EACH ROW
+                        EXECUTE FUNCTION city_search_trigger();
+                        """)
+                        
+                        logger.info("Created tsvector column and GIN index for PostgreSQL full-text search")
+                    else:
+                        logger.info("tsvector column already exists")
+            except Exception as e:
+                logger.warning(f"Could not create tsvector column and GIN index: {str(e)}")
     
     def get_table_info(self) -> Dict[str, Any]:
         """

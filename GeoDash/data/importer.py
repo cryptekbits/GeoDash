@@ -77,9 +77,8 @@ def download_city_data(force: bool = False) -> str:
         logger.info(f"Cities data already exists at {csv_path}")
         return csv_path
     
-    # Get URL from environment variable or use default
-    default_url = "https://raw.githubusercontent.com/dr5hn/countries-states-cities-database/refs/heads/master/csv/cities.csv"
-    csv_url = os.environ.get('GEODASH_CITY_DATA_URL', default_url)
+    # Download the file
+    csv_url = "https://raw.githubusercontent.com/dr5hn/countries-states-cities-database/refs/heads/master/csv/cities.csv"
     
     try:
         logger.info(f"Downloading cities.csv from {csv_url} to {csv_path}...")
@@ -226,9 +225,6 @@ class CityDataImporter:
             
         Returns:
             Standardized dataframe.
-            
-        Raises:
-            ValueError: If required columns are missing from the dataframe.
         """
         # Define column mapping
         column_mapping = {
@@ -242,25 +238,6 @@ class CityDataImporter:
             'latitude': 'lat',
             'longitude': 'lng',
         }
-        
-        # Check for required columns (validate both original and target column names)
-        required_columns = {
-            'id': ['id', 'city_id'],
-            'name': ['name', 'city_name'],
-            'country': ['country', 'country_name'],
-            'lat': ['lat', 'latitude'],
-            'lng': ['lng', 'longitude']
-        }
-        
-        missing_columns = []
-        for target_col, possible_cols in required_columns.items():
-            if not any(col in df.columns for col in possible_cols):
-                missing_columns.append(target_col)
-        
-        if missing_columns:
-            error_msg = f"Required columns missing from CSV data: {', '.join(missing_columns)}"
-            logger.error(error_msg)
-            raise ValueError(error_msg)
         
         # Rename columns that exist in the dataframe
         df = df.rename(columns={k: v for k, v in column_mapping.items() if k in df.columns})
