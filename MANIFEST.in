@@ -2,6 +2,7 @@ include LICENSE
 include README.md
 include pyproject.toml
 include requirements.txt
-recursive-include citizen/data *.csv
-recursive-include citizen/static *
+recursive-include GeoDash/data *.csv
+recursive-include GeoDash/data *.db
+recursive-include GeoDash/static *
 global-exclude *.py[cod] __pycache__ *.so *.dylib *.class 

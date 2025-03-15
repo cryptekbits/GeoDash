@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Demo of the city autocomplete functionality in the citizen module.
+Demo of the city autocomplete functionality in the GeoDash module.
 This demonstrates how the search functionality can work with just a few characters,
 similar to how a UI autocomplete would function.
 """
@@ -10,14 +10,14 @@ import os
 import sys
 
 # Add the project root directory to Python path
-# This allows importing the citizen module regardless of where script is run from
+# This allows importing the GeoDash module regardless of where script is run from
 script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.abspath(os.path.join(script_dir, '..'))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-# Now import from citizen
-from citizen import CityData
+# Now import from GeoDash
+from GeoDash import CityData
 
 def print_json(data):
     """Print data as formatted JSON."""
@@ -89,7 +89,7 @@ def main():
     city_data.close()
     
     print("\n=== End of Demo ===")
-    print("This is how the citizen module would support a UI autocomplete component.")
+    print("This is how the GeoDash module would support a UI autocomplete component.")
     print("The UI would typically start searching after 3 characters,")
     print("and update the suggestions as the user continues typing.")
 

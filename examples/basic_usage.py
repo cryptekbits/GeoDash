@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """
-Basic usage example for the citizen module.
+Basic usage example for the GeoDash module.
 """
 import json
 import os
 import sys
 
 # Add the project root directory to Python path
-# This allows importing the citizen module regardless of where script is run from
+# This allows importing the GeoDash module regardless of where script is run from
 script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.abspath(os.path.join(script_dir, '..'))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-# Now import from citizen
-from citizen import CityData
+# Now import from GeoDash
+from GeoDash import CityData
 
 def print_json(data):
     """Print data as formatted JSON."""

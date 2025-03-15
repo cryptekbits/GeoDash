@@ -1,5 +1,5 @@
 """
-CitiZen - A Python module for managing city data with fast coordinate queries and autocomplete functionality.
+GeoDash - A Python module for managing city data with fast coordinate queries and autocomplete functionality.
 
 This module provides tools for working with city data, including database-backed storage,
 coordinate-based queries, autocomplete search, and a REST API.
@@ -11,12 +11,12 @@ Key Components:
 
 Usage Examples:
     # Basic usage with CityData
-    from citizen import CityData
+    from GeoDash import CityData
     cities = CityData()
     results = cities.search_cities("new york")
     
     # Starting the API server
-    from citizen import start_server
+    from GeoDash import start_server
     start_server(host='localhost', port=8080)
 """
 
@@ -53,7 +53,7 @@ def _check_city_data():
     # If we got here, the data file isn't found - try to download it
     try:
         # Import the download function - this avoids circular imports
-        importer_module = import_module('citizen.data.importer')
+        importer_module = import_module('GeoDash.data.importer')
         download_func = getattr(importer_module, 'download_city_data')
         
         logger.info("City data not found, attempting to download...")
@@ -61,14 +61,14 @@ def _check_city_data():
         logger.info("City data downloaded successfully")
     except Exception as e:
         logger.warning(f"Could not download city data: {e}")
-        logger.info("You can manually download city data later using: citizen.data.importer.download_city_data()")
+        logger.info("You can manually download city data later using: GeoDash.data.importer.download_city_data()")
 
 # Check for city data on import
 _check_city_data()
 
 # Import public-facing classes and functions
-from citizen.data.city_manager import CityData
-from citizen.api.server import start_server
+from GeoDash.data.city_manager import CityData
+from GeoDash.api.server import start_server
 
-# Define what's imported with `from citizen import *`
+# Define what's imported with `from GeoDash import *`
 __all__ = ['CityData', 'start_server', '__version__'] 

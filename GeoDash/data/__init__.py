@@ -1,15 +1,15 @@
 """
-Data management module for the CitiZen package.
+Data management module for the GeoDash package.
 
 This module provides classes and functions for managing city data, including
 database management, schema management, data import, and query repositories.
 """
 
-from citizen.data.city_manager import CityData
-from citizen.data.database import DatabaseManager
-from citizen.data.schema import SchemaManager
-from citizen.data.importer import CityDataImporter
-from citizen.data.repositories import (
+from GeoDash.data.city_manager import CityData
+from GeoDash.data.database import DatabaseManager
+from GeoDash.data.schema import SchemaManager
+from GeoDash.data.importer import CityDataImporter
+from GeoDash.data.repositories import (
     BaseRepository,
     CityRepository,
     GeoRepository,

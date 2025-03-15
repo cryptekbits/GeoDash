@@ -1,8 +1,8 @@
 """
-Repository module for the CitiZen package.
+Repository module for the GeoDash package.
 
 This module provides repository classes for accessing and querying city data
-in the CitiZen database.
+in the GeoDash database.
 """
 
 import logging
@@ -10,7 +10,7 @@ import math
 from typing import Dict, List, Any, Tuple, Optional
 from functools import lru_cache
 
-from citizen.data.database import DatabaseManager
+from GeoDash.data.database import DatabaseManager
 
 # Configure logging
 logging.basicConfig(

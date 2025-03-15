@@ -1,8 +1,8 @@
 """
-Data importer module for the CitiZen package.
+Data importer module for the GeoDash package.
 
 This module provides functionality for importing city data from various sources
-into the CitiZen database.
+into the GeoDash database.
 """
 
 import os
@@ -10,10 +10,11 @@ import logging
 import time
 import pandas as pd
 import urllib.request
+import sys
 from typing import Dict, List, Any, Optional
 from pathlib import Path
 
-from citizen.data.database import DatabaseManager
+from GeoDash.data.database import DatabaseManager
 
 # Configure logging
 logging.basicConfig(
@@ -35,9 +36,39 @@ def download_city_data(force: bool = False) -> str:
     Raises:
         Exception: If download fails.
     """
-    # Ensure data directory exists
-    data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '')
+    # Check multiple potential locations for the data directory
+    possible_paths = [
+        # Direct path in the current module
+        os.path.dirname(os.path.abspath(__file__)),
+        # Path relative to the package (installed mode)
+        os.path.join(os.path.dirname(os.path.abspath(__file__))),
+        # Path relative to the project root
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'GeoDash', 'data')
+    ]
+    
+    # Get the base directory where the module is installed
+    if hasattr(sys, 'frozen'):
+        # For PyInstaller
+        base_dir = os.path.dirname(sys.executable)
+    else:
+        # For regular Python
+        base_dir = os.path.dirname(os.path.abspath(sys.modules['GeoDash'].__file__))
+    
+    possible_paths.append(os.path.join(base_dir, 'data'))
+    
+    # Find the first valid directory
+    data_dir = None
+    for path in possible_paths:
+        if os.path.isdir(path):
+            data_dir = path
+            break
+    
+    # If no valid directory found, use the first option and create it
+    if data_dir is None:
+        data_dir = possible_paths[0]
+        
     os.makedirs(data_dir, exist_ok=True)
+    logger.info(f"Using data directory: {data_dir}")
     
     csv_path = os.path.join(data_dir, 'cities.csv')
     
@@ -46,24 +77,25 @@ def download_city_data(force: bool = False) -> str:
         logger.info(f"Cities data already exists at {csv_path}")
         return csv_path
     
-    # Download the file
-    csv_url = "https://raw.githubusercontent.com/dr5hn/countries-states-cities-database/refs/heads/master/csv/cities.csv"
-    logger.info(f"Downloading cities data from {csv_url}...")
+    # Get URL from environment variable or use default
+    default_url = "https://raw.githubusercontent.com/dr5hn/countries-states-cities-database/refs/heads/master/csv/cities.csv"
+    csv_url = os.environ.get('GEODASH_CITY_DATA_URL', default_url)
     
     try:
+        logger.info(f"Downloading cities.csv from {csv_url} to {csv_path}...")
         urllib.request.urlretrieve(csv_url, csv_path)
-        logger.info(f"Successfully downloaded cities data to {csv_path}")
+        logger.info("Download complete!")
         return csv_path
     except Exception as e:
-        logger.error(f"Failed to download cities data: {str(e)}")
-        raise
+        logger.error(f"Failed to download cities.csv: {e}")
+        raise Exception(f"Failed to download cities.csv: {e}")
 
 class CityDataImporter:
     """
-    A class to import city data into the CitiZen database.
+    A class to import city data into the GeoDash database.
     
     This class handles the importing of city data from CSV files and other sources
-    into the CitiZen database.
+    into the GeoDash database.
     """
     
     def __init__(self, db_manager: DatabaseManager):
@@ -139,19 +171,51 @@ class CityDataImporter:
         Raises:
             FileNotFoundError: If the CSV file is not found.
         """
-        # Try to find the CSV file in several possible locations
+        # Check multiple potential locations for the data directory
+        # Similar to what's used in download_city_data
         possible_paths = [
+            # Direct module path
             os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cities.csv'),
+            # Up one level
             os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'cities.csv'),
+            # Up two levels
             os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'data', 'cities.csv'),
+            # Relative to the package in installed mode
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'cities.csv'),
         ]
         
+        # Get the base directory where the module is installed
+        if hasattr(sys, 'frozen'):
+            # For PyInstaller
+            base_dir = os.path.dirname(sys.executable)
+        else:
+            try:
+                # For regular Python
+                base_dir = os.path.dirname(os.path.abspath(sys.modules['GeoDash'].__file__))
+                possible_paths.append(os.path.join(base_dir, 'data', 'cities.csv'))
+            except (KeyError, AttributeError):
+                # Module not found, skip this path
+                pass
+        
+        # Try site-packages location for pip-installed package
+        try:
+            import site
+            site_packages = site.getsitepackages()
+            for site_path in site_packages:
+                possible_paths.append(os.path.join(site_path, 'GeoDash', 'data', 'cities.csv'))
+        except (ImportError, AttributeError):
+            pass
+        
+        # Search for the file in possible locations
         for path in possible_paths:
-            if os.path.exists(path):
+            if os.path.isfile(path):
+                logger.info(f"Found city data at: {path}")
                 return path
         
-        # If we got here, the CSV file was not found
-        raise FileNotFoundError("City data CSV file not found in standard locations")
+        # If we get here, the file wasn't found
+        logger.warning("City data file not found in any standard location")
+        logger.info(f"Searched in: {possible_paths}")
+        raise FileNotFoundError("City data file (cities.csv) not found in any standard location")
     
     def _standardize_columns(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -162,6 +226,9 @@ class CityDataImporter:
             
         Returns:
             Standardized dataframe.
+            
+        Raises:
+            ValueError: If required columns are missing from the dataframe.
         """
         # Define column mapping
         column_mapping = {
@@ -175,6 +242,25 @@ class CityDataImporter:
             'latitude': 'lat',
             'longitude': 'lng',
         }
+        
+        # Check for required columns (validate both original and target column names)
+        required_columns = {
+            'id': ['id', 'city_id'],
+            'name': ['name', 'city_name'],
+            'country': ['country', 'country_name'],
+            'lat': ['lat', 'latitude'],
+            'lng': ['lng', 'longitude']
+        }
+        
+        missing_columns = []
+        for target_col, possible_cols in required_columns.items():
+            if not any(col in df.columns for col in possible_cols):
+                missing_columns.append(target_col)
+        
+        if missing_columns:
+            error_msg = f"Required columns missing from CSV data: {', '.join(missing_columns)}"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
         
         # Rename columns that exist in the dataframe
         df = df.rename(columns={k: v for k, v in column_mapping.items() if k in df.columns})

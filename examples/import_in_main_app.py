@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """
-Example of using the citizen module directly from the main application.
+Example of using the GeoDash module directly from the main application.
 """
 import json
 import os
 import sys
 
 # Add the project root directory to Python path
-# This allows importing the citizen module regardless of where script is run from
+# This allows importing the GeoDash module regardless of where script is run from
 script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.abspath(os.path.join(script_dir, '..'))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-# Now import from citizen
-from citizen import CityData
+# Now import from GeoDash
+from GeoDash import CityData
 
 def print_json(data):
     """Print data as formatted JSON."""
@@ -22,9 +22,9 @@ def print_json(data):
 
 def main():
     """Main function."""
-    print("=== Using the citizen module in the main application ===")
+    print("=== Using the GeoDash module in the main application ===")
     
-    # Create a CityData instance (will use SQLite in citizen/data/cities.sqlite)
+    # Create a CityData instance (will use SQLite in GeoDash/data/cities.sqlite)
     city_data = CityData()
     
     # Example 1: Get cities by coordinates

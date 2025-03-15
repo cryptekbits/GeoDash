@@ -1,5 +1,5 @@
 """
-API module for the CitiZen package.
+API module for the GeoDash package.
 
 This module provides a REST API for accessing city data through HTTP endpoints.
 The API allows for searching cities by name, retrieving by coordinates, and
@@ -10,6 +10,6 @@ Key Components:
 - Endpoints: Various endpoints for accessing city data
 """
 
-from citizen.api.server import start_server
+from GeoDash.api.server import start_server
 
 __all__ = ['start_server'] 

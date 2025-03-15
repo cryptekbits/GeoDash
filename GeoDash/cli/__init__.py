@@ -1,7 +1,7 @@
 """
-Command-line interface module for the CitiZen package.
+Command-line interface module for the GeoDash package.
 
-This module provides a command-line interface for interacting with the CitiZen
+This module provides a command-line interface for interacting with the GeoDash
 package functionality. It includes commands for searching cities, retrieving
 city information by coordinates, and managing hierarchical data.
 
@@ -10,6 +10,6 @@ Key Components:
 - Commands: Various commands for accessing city data
 """
 
-from citizen.cli.commands import main
+from GeoDash.cli.commands import main
 
 __all__ = ['main'] 

@@ -1,8 +1,8 @@
 """
-Database management module for the CitiZen package.
+Database management module for the GeoDash package.
 
 This module provides the DatabaseManager class for managing database connections 
-and operations for the CitiZen package. It supports both SQLite and PostgreSQL.
+and operations for the GeoDash package. It supports both SQLite and PostgreSQL.
 """
 
 import os
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 class DatabaseManager:
     """
-    A class to manage database connections and schema for CitiZen.
+    A class to manage database connections and schema for GeoDash.
     
     This class handles the connections to either SQLite or PostgreSQL databases,
     creates schemas, and provides utilities for database operations.
@@ -40,7 +40,7 @@ class DatabaseManager:
         Initialize the DatabaseManager with a connection to the specified database.
         
         Args:
-            db_uri: Database URI. If None, a SQLite database will be created in the CitiZen module.
+            db_uri: Database URI. If None, a SQLite database will be created in the GeoDash module.
                     For SQLite: 'sqlite:///path/to/db.sqlite'
                     For PostgreSQL: 'postgresql://user:password@localhost:5432/dbname'
                     
@@ -69,7 +69,7 @@ class DatabaseManager:
         """
         try:
             if self.db_uri is None:
-                # Create a SQLite database in the CitiZen module
+                # Create a SQLite database in the GeoDash module
                 db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'cities.sqlite')
                 os.makedirs(os.path.dirname(db_path), exist_ok=True)  # Ensure the data directory exists
                 logger.info(f"No DB URI provided. Creating SQLite database at {db_path}")

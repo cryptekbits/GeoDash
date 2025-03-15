@@ -1,5 +1,5 @@
 """
-API server module for the CitiZen package.
+API server module for the GeoDash package.
 
 This module provides a Flask-based API server for accessing city data
 through RESTful API endpoints.
@@ -14,8 +14,8 @@ from functools import wraps
 from flask import Flask, request, jsonify, Response, g
 import werkzeug.exceptions
 
-from citizen.data import CityData
-from citizen.data.database import DatabaseManager
+from GeoDash.data import CityData
+from GeoDash.data.database import DatabaseManager
 
 # Configure logging
 logging.basicConfig(

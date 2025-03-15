@@ -1,7 +1,7 @@
 """
-Utility functions for the CitiZen package.
+Utility functions for the GeoDash package.
 
-This module provides utility functions used across the CitiZen package, 
+This module provides utility functions used across the GeoDash package, 
 including JSON formatting, output formatting, and other helper functions.
 """
 

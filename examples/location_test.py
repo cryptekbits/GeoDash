@@ -15,8 +15,8 @@ project_root = os.path.abspath(os.path.join(script_dir, '..'))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-# Now import from citizen
-from citizen import CityData
+# Now import from GeoDash
+from GeoDash import CityData
 
 def print_json(data):
     """Print data as formatted JSON."""

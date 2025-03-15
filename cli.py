@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Entry point for the CitiZen CLI.
+Entry point for the GeoDash CLI.
 This allows running the CLI directly with `python cli.py`.
 """
-from citizen.cli.commands import main
+from GeoDash.cli.commands import main
 
 if __name__ == '__main__':
     main() 

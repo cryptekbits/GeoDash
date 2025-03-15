@@ -1,5 +1,5 @@
 """
-City data management module for the CitiZen package.
+City data management module for the GeoDash package.
 
 This module provides the main CityData class that serves as a facade for accessing
 city data through various repositories.
@@ -10,10 +10,10 @@ import os
 from typing import Dict, List, Any, Optional, Union
 from functools import lru_cache
 
-from citizen.data.database import DatabaseManager
-from citizen.data.schema import SchemaManager
-from citizen.data.importer import CityDataImporter
-from citizen.data.repositories import CityRepository, GeoRepository, RegionRepository
+from GeoDash.data.database import DatabaseManager
+from GeoDash.data.schema import SchemaManager
+from GeoDash.data.importer import CityDataImporter
+from GeoDash.data.repositories import CityRepository, GeoRepository, RegionRepository
 
 # Configure logging
 logging.basicConfig(
@@ -30,12 +30,13 @@ class CityData:
     a unified interface for city data operations.
     """
     
-    def __init__(self, db_uri: str = None):
+    def __init__(self, db_uri: str = None, auto_import: bool = True):
         """
         Initialize the CityData manager.
         
         Args:
             db_uri: Database URI to connect to. If None, uses SQLite in the data directory.
+            auto_import: If True, automatically import city data if the database is empty.
         """
         # If no URI provided, use SQLite in data directory
         if db_uri is None:
@@ -56,6 +57,23 @@ class CityData:
         
         # Ensure the schema exists
         self.schema_manager.ensure_schema_exists()
+        
+        # Check if database is empty and try to import data if needed and auto_import is True
+        if auto_import:
+            try:
+                count = self.get_table_info()['count']
+                if count == 0:
+                    logger.info("Database is empty. Attempting to import city data...")
+                    self.import_city_data()
+            except Exception as e:
+                logger.warning(f"Error checking database content: {e}. Will try to import data if needed.")
+                # Try to import data anyway
+                try:
+                    self.import_city_data()
+                except Exception as import_err:
+                    logger.error(f"Failed to import city data during initialization: {import_err}")
+        else:
+            logger.info("Auto-import is disabled. Skipping initial data import.")
     
     def import_city_data(self, csv_path: str = None, batch_size: int = 5000) -> bool:
         """
@@ -69,9 +87,27 @@ class CityData:
             True if the import was successful, False otherwise.
         """
         try:
-            return self.data_importer.import_from_csv(csv_path, batch_size)
+            # First check if we already have data
+            count = self.get_table_info().get('count', 0)
+            if count > 0:
+                logger.info(f"Database already contains {count} cities. Import not needed.")
+                return True
+                
+            # Try to import from provided or found csv
+            imported = self.data_importer.import_from_csv(csv_path, batch_size, download_if_missing=True)
+            return imported > 0
         except Exception as e:
             logger.error(f"Error importing city data: {str(e)}")
+            # If import failed and we don't have a specific path, try to download explicitly
+            if csv_path is None:
+                try:
+                    from GeoDash.data.importer import download_city_data
+                    csv_path = download_city_data(force=True)
+                    logger.info(f"Retrying import with freshly downloaded data: {csv_path}")
+                    imported = self.data_importer.import_from_csv(csv_path, batch_size, download_if_missing=False)
+                    return imported > 0
+                except Exception as download_err:
+                    logger.error(f"Error during retry with explicit download: {str(download_err)}")
             return False
     
     @lru_cache(maxsize=5000)

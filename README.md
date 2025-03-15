@@ -1,4 +1,4 @@
-# CitiZen
+# GeoDash
 
 A Python module for managing city data with fast coordinate queries and autocomplete functionality.
 
@@ -6,8 +6,39 @@ A Python module for managing city data with fast coordinate queries and autocomp
 
 ```bash
 # Install from PyPI
-pip install CitiZen
+pip install GeoDash
 ```
+
+### Installing from Git
+
+```bash
+# Clone the repository
+git clone https://github.com/yourusername/GeoDash.git
+cd GeoDash
+
+# Install directly
+pip install .
+
+# OR install in development mode
+pip install -e .
+```
+
+### Installing from Source Directory
+
+If you already have the source code directory (e.g., downloaded as a ZIP and extracted):
+
+```bash
+# Navigate to the GeoDash directory
+cd /path/to/GeoDash
+
+# Install the package
+pip install .
+
+# OR install in development mode (for development)
+pip install -e .
+```
+
+When installing from source, the city data CSV file will be automatically downloaded. If you're in an environment without internet access, you can manually place the `cities.csv` file in `GeoDash/data/` before installation.
 
 ## Features
 
@@ -24,8 +55,8 @@ pip install CitiZen
 ### Direct Import
 
 ```python
-# Import from the CitiZen package
-from citizen import CityData
+# Import from the GeoDash package
+from GeoDash import CityData
 
 # Create a CityData instance with a SQLite database
 city_data = CityData()
@@ -78,32 +109,32 @@ async function handleCityInputChange(value) {
 
 ```bash
 # Use the installed console script
-citizen search "New York" --limit 5 --country "United States"
+GeoDash search "New York" --limit 5 --country "United States"
 
 # Get a city by ID
-citizen get-city 1234
+GeoDash get-city 1234
 
 # Get cities near coordinates
-citizen coordinates 40.7128 -74.0060 --radius 10
+GeoDash coordinates 40.7128 -74.0060 --radius 10
 
 # Get a list of countries
-citizen countries
+GeoDash countries
 
 # Get states in a country
-citizen states "United States"
+GeoDash states "United States"
 
 # Get cities in a state
-citizen cities-in-state "California" "United States"
+GeoDash cities-in-state "California" "United States"
 
 # Start the API server
-citizen server --host 0.0.0.0 --port 5000 --debug
+GeoDash server --host 0.0.0.0 --port 5000 --debug
 ```
 
 ### As an API Server
 
 ```bash
 # Start the API server using the console script
-citizen server --host 0.0.0.0 --port 5000 --debug
+GeoDash server --host 0.0.0.0 --port 5000 --debug
 ```
 
 #### API Endpoints
@@ -122,7 +153,7 @@ The module will create a SQLite database if no database URI is provided. The dat
 
 ## City Data Download
 
-CitiZen requires city data to function properly. When you first use CitiZen, it will automatically:
+GeoDash requires city data to function properly. When you first use GeoDash, it will automatically:
 
 1. Check if the city data CSV file exists in standard locations
 2. If not found, it will attempt to download the file from our servers
@@ -134,19 +165,19 @@ You can also manage the city data manually:
 
 ```python
 # Import the download function
-from citizen.data.importer import download_city_data
+from GeoDash.data.importer import download_city_data
 
 # Manually download/update the city data at any time
 download_city_data(force=True)  # force=True to redownload even if it exists
 ```
 
-If you're using CitiZen in an environment without internet access, you can:
+If you're using GeoDash in an environment without internet access, you can:
 1. Pre-download the city data by including `--download-city-data` when installing:
    ```bash
-   pip install CitiZen --download-city-data
+   pip install GeoDash --download-city-data
    ```
 2. Or manually place the `cities.csv` file in one of these locations:
-   - Inside the installed package at `citizen/data/cities.csv`
+   - Inside the installed package at `GeoDash/data/cities.csv`
    - In the top-level `data/` directory if running from source
 3. Or manually download the file from [here](https://raw.githubusercontent.com/dr5hn/countries-states-cities-database/refs/heads/master/csv/cities.csv) and place it in one of the above locations
 
@@ -173,8 +204,8 @@ For development, clone the repository and install in development mode:
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/CitiZen.git
-cd CitiZen
+git clone https://github.com/yourusername/GeoDash.git
+cd GeoDash
 
 # Install in development mode
 pip install -e .

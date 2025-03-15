@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Example showing how to run the citizen module as an API server.
+Example showing how to run the GeoDash module as an API server.
 
 This script starts a Flask server that provides REST API endpoints
 for accessing the city data functionality.
@@ -11,7 +11,7 @@ import logging
 import argparse
 
 # Add the project root directory to Python path
-# This allows importing the citizen module regardless of where script is run from
+# This allows importing the GeoDash module regardless of where script is run from
 script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.abspath(os.path.join(script_dir, '..'))
 if project_root not in sys.path:
@@ -21,8 +21,8 @@ if project_root not in sys.path:
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Now import from citizen
-from citizen import start_server
+# Now import from GeoDash
+from GeoDash import start_server
 
 def main():
     """Main entry point for the API server example."""

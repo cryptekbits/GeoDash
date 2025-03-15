@@ -1,5 +1,5 @@
 """
-Command-line interface (CLI) commands for the CitiZen package.
+Command-line interface (CLI) commands for the GeoDash package.
 
 This module provides CLI commands for accessing city data from the command line.
 """
@@ -10,7 +10,8 @@ import logging
 import argparse
 from typing import Any, Dict, List, Optional
 
-from citizen.data import CityData
+from GeoDash.data import CityData
+from GeoDash.api.server import start_server
 
 # Configure logging
 logging.basicConfig(
@@ -203,14 +204,37 @@ def table_info_command(args: argparse.Namespace) -> int:
         logger.error(f"Error getting table info: {str(e)}")
         return 1
 
+def server_command(args: argparse.Namespace) -> int:
+    """
+    Start the GeoDash API server.
+    
+    Args:
+        args: Command-line arguments with host, port, debug parameters
+        
+    Returns:
+        Exit code (0 for success, non-zero for failure)
+    """
+    try:
+        logger.info(f"Starting server on {args.host}:{args.port}")
+        start_server(
+            host=args.host,
+            port=args.port,
+            db_uri=args.db_uri,
+            debug=args.debug
+        )
+        return 0
+    except Exception as e:
+        logger.error(f"Error starting server: {str(e)}")
+        return 1
+
 def main() -> int:
     """
-    Main entry point for the CitiZen command-line interface.
+    Main entry point for the GeoDash command-line interface.
     
     Returns:
         Exit code (0 for success, non-zero for failure)
     """
-    parser = argparse.ArgumentParser(description='CitiZen CLI for accessing city data')
+    parser = argparse.ArgumentParser(description='GeoDash CLI for accessing city data')
     parser.add_argument('--db-uri', help='Database URI (e.g., sqlite:///cities.db or postgresql://user:pass@localhost/cities)')
     
     subparsers = parser.add_subparsers(dest='command', help='Command to execute')
@@ -259,6 +283,13 @@ def main() -> int:
     # Table info command
     info_parser = subparsers.add_parser('table-info', help='Get information about the city_data table')
     info_parser.set_defaults(func=table_info_command)
+    
+    # Server command
+    server_parser = subparsers.add_parser('server', help='Start the GeoDash API server')
+    server_parser.add_argument('--host', type=str, default='0.0.0.0', help='The host to bind to')
+    server_parser.add_argument('--port', type=int, default=5000, help='The port to bind to')
+    server_parser.add_argument('--debug', action='store_true', help='Enable debug mode')
+    server_parser.set_defaults(func=server_command)
     
     # Parse arguments and execute command
     args = parser.parse_args()

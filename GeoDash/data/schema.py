@@ -1,12 +1,12 @@
 """
-Schema management module for the CitiZen package.
+Schema management module for the GeoDash package.
 
-This module provides schema definitions and management for the CitiZen database.
+This module provides schema definitions and management for the GeoDash database.
 """
 
 import logging
 from typing import List, Dict, Any
-from citizen.data.database import DatabaseManager
+from GeoDash.data.database import DatabaseManager
 
 # Configure logging
 logging.basicConfig(
@@ -17,10 +17,10 @@ logger = logging.getLogger(__name__)
 
 class SchemaManager:
     """
-    A class to manage the database schema for CitiZen.
+    A class to manage the database schema for GeoDash.
     
     This class handles the creation and management of tables and indexes
-    for the CitiZen database.
+    for the GeoDash database.
     """
     
     def __init__(self, db_manager: DatabaseManager):
