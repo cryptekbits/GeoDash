@@ -17,6 +17,7 @@ import pickle
 import sys
 from multiprocessing import shared_memory, Lock
 import tempfile
+import atexit
 
 from GeoDash.data.database import DatabaseManager
 
@@ -68,12 +69,18 @@ _CITY_REPO_SIZE_BYTES = 200 * 1024 * 1024  # 200MB for city repository
 _GEO_REPO_SIZE_BYTES = 10 * 1024 * 1024    # 10MB for geo repository
 _REGION_REPO_SIZE_BYTES = 5 * 1024 * 1024  # 5MB for region repository
 
+# Shared memory reference counting
+_shm_reference_counts = {}
+_shm_ref_lock = Lock()
+
 def _create_or_get_shared_flag(name):
     """Creates or gets a shared memory flag for repository initialization."""
     try:
         # Try to attach to existing shared memory
         shm = shared_memory.SharedMemory(name=name)
         logger.debug(f"Attached to existing shared memory flag: {name}")
+        _increment_shm_ref_count(name)
+        BaseRepository.register_shared_memory(name, shm)
     except FileNotFoundError:
         # Create new shared memory if it doesn't exist
         try:
@@ -82,12 +89,16 @@ def _create_or_get_shared_flag(name):
                     # Double-check to avoid race condition
                     shm = shared_memory.SharedMemory(name=name)
                     logger.debug(f"Attached to existing shared memory flag in lock: {name}")
+                    _increment_shm_ref_count(name)
+                    BaseRepository.register_shared_memory(name, shm)
                 except FileNotFoundError:
                     # Create the shared memory block (1 byte for flag)
                     shm = shared_memory.SharedMemory(name=name, create=True, size=1)
                     # Initialize to 0 (not initialized)
                     shm.buf[0] = 0
                     logger.debug(f"Created new shared memory flag: {name}")
+                    _increment_shm_ref_count(name)
+                    BaseRepository.register_shared_memory(name, shm)
         except Exception as e:
             logger.error(f"Error creating shared memory flag {name}: {str(e)}")
             # Fallback to a non-shared approach
@@ -100,6 +111,8 @@ def _create_or_get_shared_data(name, size_bytes):
         # Try to attach to existing shared memory
         shm = shared_memory.SharedMemory(name=name)
         logger.debug(f"Attached to existing shared memory data block: {name}")
+        _increment_shm_ref_count(name)
+        BaseRepository.register_shared_memory(name, shm)
         return shm, False  # Return with flag indicating not newly created
     except FileNotFoundError:
         # Create new shared memory if it doesn't exist
@@ -109,17 +122,40 @@ def _create_or_get_shared_data(name, size_bytes):
                     # Double-check to avoid race condition
                     shm = shared_memory.SharedMemory(name=name)
                     logger.debug(f"Attached to existing shared memory data block in lock: {name}")
+                    _increment_shm_ref_count(name)
+                    BaseRepository.register_shared_memory(name, shm)
                     return shm, False  # Not newly created
                 except FileNotFoundError:
                     # Create the shared memory block with specified size
                     shm = shared_memory.SharedMemory(name=name, create=True, size=size_bytes)
                     logger.debug(f"Created new shared memory data block: {name} with size {size_bytes}")
+                    _increment_shm_ref_count(name)
+                    BaseRepository.register_shared_memory(name, shm)
                     return shm, True  # Newly created
         except Exception as e:
             logger.error(f"Error creating shared memory data block {name}: {str(e)}")
             # Fallback to a non-shared approach
             return None, False
     
+def _increment_shm_ref_count(name):
+    """Increment reference count for a shared memory block."""
+    with _shm_ref_lock:
+        if name in _shm_reference_counts:
+            _shm_reference_counts[name] += 1
+        else:
+            _shm_reference_counts[name] = 1
+        logger.debug(f"Incremented reference count for {name} to {_shm_reference_counts[name]}")
+
+def _decrement_shm_ref_count(name):
+    """Decrement reference count for a shared memory block."""
+    with _shm_ref_lock:
+        if name in _shm_reference_counts:
+            _shm_reference_counts[name] -= 1
+            count = _shm_reference_counts[name]
+            logger.debug(f"Decremented reference count for {name} to {count}")
+            return count
+        return 0
+
 def _serialize_to_shared_memory(obj, shm):
     """Serialize an object and store it in shared memory."""
     try:
@@ -337,44 +373,98 @@ def get_region_repository(db_manager: DatabaseManager) -> 'RegionRepository':
     
     return _region_repository_instance
 
-# Clean up function to be called at process exit
-def _cleanup_shared_memory():
-    """Cleanup shared memory at process exit."""
-    try:
-        # Only the parent process should cleanup the shared memory
-        if os.getpid() == os.getppid():
-            # Clean up flag shared memory
-            for name in [_CITY_REPO_SHM_NAME, _GEO_REPO_SHM_NAME, _REGION_REPO_SHM_NAME]:
-                try:
-                    shm = shared_memory.SharedMemory(name=name)
-                    shm.close()
-                    shm.unlink()
-                    logger.debug(f"Cleaned up shared memory flag: {name}")
-                except Exception as e:
-                    logger.debug(f"Error cleaning up shared memory flag {name}: {str(e)}")
-            
-            # Clean up data shared memory
-            for name in [_CITY_REPO_DATA_SHM_NAME, _GEO_REPO_DATA_SHM_NAME, _REGION_REPO_DATA_SHM_NAME]:
-                try:
-                    shm = shared_memory.SharedMemory(name=name)
-                    shm.close()
-                    shm.unlink()
-                    logger.debug(f"Cleaned up shared memory data: {name}")
-                except Exception as e:
-                    logger.debug(f"Error cleaning up shared memory data {name}: {str(e)}")
-    except Exception as e:
-        logger.error(f"Error in shared memory cleanup: {str(e)}")
-
-# Register cleanup handler
-import atexit
-atexit.register(_cleanup_shared_memory)
-
 class BaseRepository:
     """
     Base repository class for city data.
     
     This class provides common functionality for all city data repositories.
     """
+    
+    # Shared memory management for all repositories
+    _shared_memory_handles = {}
+    
+    @classmethod
+    def close_shared_memory(cls, name):
+        """Close a shared memory block safely."""
+        try:
+            if name in cls._shared_memory_handles:
+                shm = cls._shared_memory_handles[name]
+                shm.close()
+                del cls._shared_memory_handles[name]
+                logger.debug(f"Closed shared memory: {name}")
+                return True
+        except Exception as e:
+            logger.error(f"Error closing shared memory {name}: {str(e)}")
+        return False
+    
+    @classmethod
+    def register_shared_memory(cls, name, shm):
+        """Register a shared memory handle for cleanup."""
+        cls._shared_memory_handles[name] = shm
+        logger.debug(f"Registered shared memory handle: {name}")
+    
+    @classmethod
+    def cleanup_shared_memory(cls):
+        """Cleanup shared memory blocks, considering reference counting."""
+        logger.info("Beginning shared memory cleanup process")
+        
+        try:
+            # Only the parent process should fully unlink the shared memory
+            is_parent = os.getpid() == os.getppid()
+            
+            # Process flag shared memory blocks
+            for name in [_CITY_REPO_SHM_NAME, _GEO_REPO_SHM_NAME, _REGION_REPO_SHM_NAME]:
+                try:
+                    # Always close our handle
+                    cls.close_shared_memory(name)
+                    
+                    # Decrement reference count
+                    ref_count = _decrement_shm_ref_count(name)
+                    
+                    # If we're the parent process or the last reference, unlink
+                    if is_parent or ref_count <= 0:
+                        try:
+                            shm = shared_memory.SharedMemory(name=name)
+                            shm.close()
+                            shm.unlink()
+                            logger.info(f"Cleaned up shared memory flag: {name}")
+                        except FileNotFoundError:
+                            logger.debug(f"Shared memory flag already removed: {name}")
+                        except Exception as e:
+                            logger.warning(f"Error unlinking shared memory flag {name}: {str(e)}")
+                    else:
+                        logger.debug(f"Not unlinking {name}, ref count: {ref_count}")
+                except Exception as e:
+                    logger.warning(f"Error during cleanup of shared memory flag {name}: {str(e)}")
+            
+            # Process data shared memory blocks
+            for name in [_CITY_REPO_DATA_SHM_NAME, _GEO_REPO_DATA_SHM_NAME, _REGION_REPO_DATA_SHM_NAME]:
+                try:
+                    # Always close our handle
+                    cls.close_shared_memory(name)
+                    
+                    # Decrement reference count
+                    ref_count = _decrement_shm_ref_count(name)
+                    
+                    # If we're the parent process or the last reference, unlink
+                    if is_parent or ref_count <= 0:
+                        try:
+                            shm = shared_memory.SharedMemory(name=name)
+                            shm.close()
+                            shm.unlink()
+                            logger.info(f"Cleaned up shared memory data: {name}")
+                        except FileNotFoundError:
+                            logger.debug(f"Shared memory data already removed: {name}")
+                        except Exception as e:
+                            logger.warning(f"Error unlinking shared memory data {name}: {str(e)}")
+                    else:
+                        logger.debug(f"Not unlinking {name}, ref count: {ref_count}")
+                except Exception as e:
+                    logger.warning(f"Error during cleanup of shared memory data {name}: {str(e)}")
+                    
+            logger.info("Shared memory cleanup completed")
+        except Exception as e:
+            logger.error(f"Error in shared memory cleanup: {str(e)}")
     
     def __init__(self, db_manager: DatabaseManager):
         """
@@ -385,6 +475,16 @@ class BaseRepository:
         """
         self.db_manager = db_manager
         self.table_name = 'city_data'
+    
+    def __del__(self):
+        """Destructor to ensure shared memory is cleaned up when the repository is garbage collected."""
+        try:
+            # Attempt to clean up shared memory resources
+            self.__class__.cleanup_shared_memory()
+            logger.debug(f"Repository cleanup on garbage collection for {self.__class__.__name__}")
+        except Exception as e:
+            # Avoid errors during garbage collection
+            logger.debug(f"Error during repository cleanup on garbage collection: {str(e)}")
     
     def _row_to_dict(self, row: Tuple, columns: List[str]) -> Dict[str, Any]:
         """
