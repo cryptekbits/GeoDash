@@ -6,13 +6,8 @@ This script demonstrates how search results are prioritized based on user locati
 """
 
 import json
-import os
-import sys
 import time
 import logging
-
-# Add parent directory to path so we can import GeoDash
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from GeoDash.data.city_manager import CityData
 

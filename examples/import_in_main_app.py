@@ -3,15 +3,6 @@
 Example of using the GeoDash module directly from the main application.
 """
 import json
-import os
-import sys
-
-# Add the project root directory to Python path
-# This allows importing the GeoDash module regardless of where script is run from
-script_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.abspath(os.path.join(script_dir, '..'))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
 
 # Now import from GeoDash
 from GeoDash import CityData
@@ -57,10 +48,11 @@ def main():
         city_id = cities[0]['id']
         print(f"Stored city_id: {city_id} in the form/database")
     
-    # Later, retrieve the full city data when needed
-    if city_id:
-        print("\nLater, retrieving the full city data...")
-        city = city_data.get_city_by_id(city_id)
+    # Get a city by ID
+    if cities:
+        city_id = cities[0]['id']
+        print(f"\nGetting city with ID {city_id}...")
+        city = city_data.get_city(city_id)
         print_json(city)
         
         # Use the coordinates for calculations

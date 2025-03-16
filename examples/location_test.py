@@ -5,15 +5,7 @@ This shows how search results are prioritized based on:
 1. User's coordinates (proximity)
 2. User's country
 """
-import os
-import sys
 import json
-
-# Add the project root directory to Python path
-script_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.abspath(os.path.join(script_dir, '..'))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
 
 # Now import from GeoDash
 from GeoDash import CityData
