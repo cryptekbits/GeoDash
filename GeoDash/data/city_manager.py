@@ -12,7 +12,7 @@ from functools import lru_cache
 
 from GeoDash.data.database import DatabaseManager
 from GeoDash.data.schema import SchemaManager
-from GeoDash.data.importer import CityDataImporter
+from GeoDash.data.importer import CityDataImporter, get_data_directory
 from GeoDash.data.repositories import (
     get_city_repository, 
     get_geo_repository, 
@@ -44,8 +44,7 @@ class CityData:
         """
         # If no URI provided, use SQLite in data directory
         if db_uri is None:
-            data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data')
-            os.makedirs(data_dir, exist_ok=True)
+            data_dir = get_data_directory()
             db_uri = f"sqlite:///{os.path.join(data_dir, 'cities.db')}"
             
         worker_id = os.environ.get('GUNICORN_WORKER_ID', 'standalone')

@@ -23,6 +23,46 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+def get_data_directory() -> str:
+    """
+    Get the directory where GeoDash data is stored.
+    
+    This function checks the following locations in order:
+    1. GEODASH_DATA_DIR environment variable
+    2. ~/.geodash/data directory
+    3. A directory within the package
+    
+    Returns:
+        Path to the data directory (will be created if it doesn't exist)
+    """
+    # 1. Check environment variable first
+    if 'GEODASH_DATA_DIR' in os.environ:
+        data_dir = os.environ['GEODASH_DATA_DIR']
+        os.makedirs(data_dir, exist_ok=True)
+        return data_dir
+    
+    # 2. Check ~/.geodash/data
+    home_data_dir = os.path.join(os.path.expanduser('~'), '.geodash', 'data')
+    if os.path.isdir(home_data_dir):
+        return home_data_dir
+        
+    # 3. Fall back to package directory
+    # Get the base directory where the module is installed
+    if hasattr(sys, 'frozen'):
+        # For PyInstaller
+        base_dir = os.path.dirname(sys.executable)
+    else:
+        try:
+            # For regular Python
+            base_dir = os.path.dirname(os.path.abspath(sys.modules['GeoDash'].__file__))
+        except (KeyError, AttributeError):
+            # Module not found, use directory of this file
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    package_data_dir = os.path.join(base_dir, 'data')
+    os.makedirs(package_data_dir, exist_ok=True)
+    return package_data_dir
+
 def download_city_data(force: bool = False) -> str:
     """
     Look for local cities.csv file first, and download only if not found.
@@ -40,44 +80,9 @@ def download_city_data(force: bool = False) -> str:
     Raises:
         Exception: If download is needed but fails.
     """
-    # Check multiple potential locations for the data directory
-    possible_paths = [
-        # Direct path in the current module
-        os.path.dirname(os.path.abspath(__file__)),
-        # Path relative to the package (installed mode)
-        os.path.join(os.path.dirname(os.path.abspath(__file__))),
-        # Path relative to the project root
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'GeoDash', 'data')
-    ]
+    # Get the data directory
+    data_dir = get_data_directory()
     
-    # Get the base directory where the module is installed
-    if hasattr(sys, 'frozen'):
-        # For PyInstaller
-        base_dir = os.path.dirname(sys.executable)
-    else:
-        # For regular Python
-        base_dir = os.path.dirname(os.path.abspath(sys.modules['GeoDash'].__file__))
-    
-    possible_paths.append(os.path.join(base_dir, 'data'))
-    
-    # Additional locations to check
-    possible_paths.extend([
-        os.path.join(os.getcwd(), 'data'),  # Current working directory's data folder
-        os.path.join(os.path.expanduser('~'), '.geodash', 'data')  # User's home directory
-    ])
-    
-    # Find the first valid directory
-    data_dir = None
-    for path in possible_paths:
-        if os.path.isdir(path):
-            data_dir = path
-            break
-    
-    # If no valid directory found, use the first option and create it
-    if data_dir is None:
-        data_dir = possible_paths[0]
-        
-    os.makedirs(data_dir, exist_ok=True)
     logger.info(f"Using data directory: {data_dir}")
     
     csv_path = os.path.join(data_dir, 'cities.csv')
@@ -208,40 +213,21 @@ class CityDataImporter:
         Raises:
             FileNotFoundError: If the CSV file is not found.
         """
-        # Check multiple potential locations for the data directory
-        # Similar to what's used in download_city_data
+        # Use the central get_data_directory function
+        data_dir = get_data_directory()
+        csv_path = os.path.join(data_dir, 'cities.csv')
+        
+        if os.path.isfile(csv_path):
+            logger.info(f"Found city data at: {csv_path}")
+            return csv_path
+            
+        # If not found in the primary location, check a few more standard locations
         possible_paths = [
             # Direct module path
             os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cities.csv'),
             # Up one level
             os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'cities.csv'),
-            # Up two levels
-            os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'data', 'cities.csv'),
-            # Relative to the package in installed mode
-            os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'cities.csv'),
         ]
-        
-        # Get the base directory where the module is installed
-        if hasattr(sys, 'frozen'):
-            # For PyInstaller
-            base_dir = os.path.dirname(sys.executable)
-        else:
-            try:
-                # For regular Python
-                base_dir = os.path.dirname(os.path.abspath(sys.modules['GeoDash'].__file__))
-                possible_paths.append(os.path.join(base_dir, 'data', 'cities.csv'))
-            except (KeyError, AttributeError):
-                # Module not found, skip this path
-                pass
-        
-        # Try site-packages location for pip-installed package
-        try:
-            import site
-            site_packages = site.getsitepackages()
-            for site_path in site_packages:
-                possible_paths.append(os.path.join(site_path, 'GeoDash', 'data', 'cities.csv'))
-        except (ImportError, AttributeError):
-            pass
         
         # Search for the file in possible locations
         for path in possible_paths:
@@ -249,10 +235,7 @@ class CityDataImporter:
                 logger.info(f"Found city data at: {path}")
                 return path
         
-        # If we get here, the file wasn't found
-        logger.warning("City data file not found in any standard location")
-        logger.info(f"Searched in: {possible_paths}")
-        raise FileNotFoundError("City data file (cities.csv) not found in any standard location")
+        raise FileNotFoundError("City data CSV file not found in any standard locations")
     
     def _standardize_columns(self, df: pd.DataFrame) -> pd.DataFrame:
         """
