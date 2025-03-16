@@ -11,6 +11,12 @@ from typing import Dict, List, Any, Tuple, Optional
 from functools import lru_cache
 import time
 import asyncio
+import os
+import threading
+import pickle
+import sys
+from multiprocessing import shared_memory, Lock
+import tempfile
 
 from GeoDash.data.database import DatabaseManager
 
@@ -38,10 +44,127 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Global singleton repository instances
+# Shared memory initialization lock
+_init_lock = Lock()
+
+# Shared memory names
+_CITY_REPO_SHM_NAME = "geodash_city_repo_init"
+_GEO_REPO_SHM_NAME = "geodash_geo_repo_init"
+_REGION_REPO_SHM_NAME = "geodash_region_repo_init"
+
+# Shared memory for actual repository data
+_CITY_REPO_DATA_SHM_NAME = "geodash_city_repo_data"
+_GEO_REPO_DATA_SHM_NAME = "geodash_geo_repo_data" 
+_REGION_REPO_DATA_SHM_NAME = "geodash_region_repo_data"
+
+# Process-local singleton instances (only created once per process)
 _city_repository_instance = None
 _geo_repository_instance = None
 _region_repository_instance = None
+
+# Estimated memory sizes for repository data (adjust based on your data size)
+# These values are conservative estimates, increase if needed
+_CITY_REPO_SIZE_BYTES = 200 * 1024 * 1024  # 200MB for city repository
+_GEO_REPO_SIZE_BYTES = 10 * 1024 * 1024    # 10MB for geo repository
+_REGION_REPO_SIZE_BYTES = 5 * 1024 * 1024  # 5MB for region repository
+
+def _create_or_get_shared_flag(name):
+    """Creates or gets a shared memory flag for repository initialization."""
+    try:
+        # Try to attach to existing shared memory
+        shm = shared_memory.SharedMemory(name=name)
+        logger.debug(f"Attached to existing shared memory flag: {name}")
+    except FileNotFoundError:
+        # Create new shared memory if it doesn't exist
+        try:
+            with _init_lock:
+                try:
+                    # Double-check to avoid race condition
+                    shm = shared_memory.SharedMemory(name=name)
+                    logger.debug(f"Attached to existing shared memory flag in lock: {name}")
+                except FileNotFoundError:
+                    # Create the shared memory block (1 byte for flag)
+                    shm = shared_memory.SharedMemory(name=name, create=True, size=1)
+                    # Initialize to 0 (not initialized)
+                    shm.buf[0] = 0
+                    logger.debug(f"Created new shared memory flag: {name}")
+        except Exception as e:
+            logger.error(f"Error creating shared memory flag {name}: {str(e)}")
+            # Fallback to a non-shared approach
+            return None
+    return shm
+
+def _create_or_get_shared_data(name, size_bytes):
+    """Creates or gets a shared memory block for repository data."""
+    try:
+        # Try to attach to existing shared memory
+        shm = shared_memory.SharedMemory(name=name)
+        logger.debug(f"Attached to existing shared memory data block: {name}")
+        return shm, False  # Return with flag indicating not newly created
+    except FileNotFoundError:
+        # Create new shared memory if it doesn't exist
+        try:
+            with _init_lock:
+                try:
+                    # Double-check to avoid race condition
+                    shm = shared_memory.SharedMemory(name=name)
+                    logger.debug(f"Attached to existing shared memory data block in lock: {name}")
+                    return shm, False  # Not newly created
+                except FileNotFoundError:
+                    # Create the shared memory block with specified size
+                    shm = shared_memory.SharedMemory(name=name, create=True, size=size_bytes)
+                    logger.debug(f"Created new shared memory data block: {name} with size {size_bytes}")
+                    return shm, True  # Newly created
+        except Exception as e:
+            logger.error(f"Error creating shared memory data block {name}: {str(e)}")
+            # Fallback to a non-shared approach
+            return None, False
+    
+def _serialize_to_shared_memory(obj, shm):
+    """Serialize an object and store it in shared memory."""
+    try:
+        # Pickle the object to bytes
+        pickled_data = pickle.dumps(obj)
+        data_size = len(pickled_data)
+        
+        # Check if it fits in the shared memory
+        if data_size > shm.size:
+            logger.error(f"Object size ({data_size} bytes) exceeds shared memory size ({shm.size} bytes)")
+            return False
+        
+        # Store the data size at the beginning (first 8 bytes) for easy retrieval
+        size_bytes = data_size.to_bytes(8, byteorder='little')
+        shm.buf[:8] = size_bytes
+        
+        # Store the pickled data after the size
+        shm.buf[8:8+data_size] = pickled_data
+        logger.debug(f"Serialized object to shared memory ({data_size} bytes)")
+        return True
+    except Exception as e:
+        logger.error(f"Error serializing to shared memory: {str(e)}")
+        return False
+
+def _deserialize_from_shared_memory(shm):
+    """Deserialize an object from shared memory."""
+    try:
+        # Read the data size from the first 8 bytes
+        data_size = int.from_bytes(shm.buf[:8], byteorder='little')
+        
+        # Check if the size is valid
+        if data_size <= 0 or data_size > shm.size - 8:
+            logger.error(f"Invalid data size in shared memory: {data_size}")
+            return None
+        
+        # Read the pickled data after the size
+        pickled_data = bytes(shm.buf[8:8+data_size])
+        
+        # Unpickle the object
+        obj = pickle.loads(pickled_data)
+        logger.debug(f"Deserialized object from shared memory ({data_size} bytes)")
+        return obj
+    except Exception as e:
+        logger.error(f"Error deserializing from shared memory: {str(e)}")
+        return None
 
 def get_city_repository(db_manager: DatabaseManager) -> 'CityRepository':
     """
@@ -57,9 +180,71 @@ def get_city_repository(db_manager: DatabaseManager) -> 'CityRepository':
         The global CityRepository instance
     """
     global _city_repository_instance
-    if _city_repository_instance is None:
-        logger.info("Creating global CityRepository singleton instance")
+    
+    # If we already have a process-local instance, return it
+    if _city_repository_instance is not None:
+        return _city_repository_instance
+    
+    # Check if we're in a Gunicorn worker
+    worker_id = os.environ.get('GUNICORN_WORKER_ID')
+    
+    # Get or create the shared initialization flag - this helps workers coordinate
+    # so they don't all try to load data simultaneously
+    init_shm = _create_or_get_shared_flag(_CITY_REPO_SHM_NAME)
+    
+    if init_shm is None:
+        # Fallback to old behavior if shared memory fails
+        logger.warning("Shared memory failed, falling back to process-local singleton")
+        logger.info("Creating process-local CityRepository instance")
         _city_repository_instance = CityRepository(db_manager)
+        return _city_repository_instance
+    
+    with _init_lock:
+        # Check if another process has already initialized the repository in this run
+        if init_shm.buf[0] == 0:
+            # We're the first to initialize
+            if worker_id:
+                logger.info(f"Worker {worker_id}: First worker to initialize CityRepository")
+            else: 
+                logger.info("Creating global CityRepository singleton instance (first process)")
+            
+            # Create the repository - this loads all cities from DB
+            start_time = time.time()
+            repo = CityRepository(db_manager)
+            load_time = time.time() - start_time
+            
+            if worker_id:
+                logger.info(f"Worker {worker_id}: Loaded cities in {load_time:.2f}s")
+            else:
+                logger.info(f"Cities loaded in {load_time:.2f}s")
+            
+            # Mark as initialized for other processes
+            init_shm.buf[0] = 1
+            
+            # Store our instance
+            _city_repository_instance = repo
+            
+        else:
+            # Another process already initialized it, we load our own copy
+            # because it's more reliable than trying to share complex data structures
+            if worker_id:
+                logger.info(f"Worker {worker_id}: Loading CityRepository data (worker {init_shm.buf[0]} was first)")
+            else:
+                logger.info("Loading CityRepository instance (another process was first)")
+            
+            # Create our own repository instance
+            start_time = time.time()
+            _city_repository_instance = CityRepository(db_manager)
+            load_time = time.time() - start_time
+            
+            if worker_id:
+                logger.info(f"Worker {worker_id}: Loaded cities in {load_time:.2f}s")
+            else:
+                logger.info(f"Cities loaded in {load_time:.2f}s")
+    
+    # Clean up initialization flag
+    init_shm.close()
+    
     return _city_repository_instance
 
 def get_geo_repository(db_manager: DatabaseManager) -> 'GeoRepository':
@@ -73,9 +258,38 @@ def get_geo_repository(db_manager: DatabaseManager) -> 'GeoRepository':
         The global GeoRepository instance
     """
     global _geo_repository_instance
-    if _geo_repository_instance is None:
-        logger.info("Creating global GeoRepository singleton instance")
+    
+    # If we already have a process-local instance, return it
+    if _geo_repository_instance is not None:
+        return _geo_repository_instance
+    
+    # For the GeoRepository, we don't need to share data as it's primarily 
+    # a wrapper for database queries. Just use the flag for coordination.
+    init_shm = _create_or_get_shared_flag(_GEO_REPO_SHM_NAME)
+    
+    if init_shm is None:
+        # Fallback to old behavior if shared memory fails
+        logger.warning("Shared memory failed, falling back to process-local singleton")
+        logger.info("Creating process-local GeoRepository instance")
         _geo_repository_instance = GeoRepository(db_manager)
+        return _geo_repository_instance
+    
+    with _init_lock:
+        # Check if another process has already initialized the repository
+        if init_shm.buf[0] == 0:
+            # We're the first to initialize
+            logger.info("Creating global GeoRepository singleton instance (first process)")
+            _geo_repository_instance = GeoRepository(db_manager)
+            # Mark as initialized for other processes
+            init_shm.buf[0] = 1
+        else:
+            # Another process already initialized it, create our local instance
+            logger.info("Creating process-local copy of GeoRepository singleton instance")
+            _geo_repository_instance = GeoRepository(db_manager)
+    
+    # Clean up shared memory when no longer needed
+    init_shm.close()
+    
     return _geo_repository_instance
 
 def get_region_repository(db_manager: DatabaseManager) -> 'RegionRepository':
@@ -89,10 +303,71 @@ def get_region_repository(db_manager: DatabaseManager) -> 'RegionRepository':
         The global RegionRepository instance
     """
     global _region_repository_instance
-    if _region_repository_instance is None:
-        logger.info("Creating global RegionRepository singleton instance")
+    
+    # If we already have a process-local instance, return it
+    if _region_repository_instance is not None:
+        return _region_repository_instance
+    
+    # Region repository also primarily wraps database queries and doesn't store
+    # large amounts of data, so we also just coordinate initialization.
+    init_shm = _create_or_get_shared_flag(_REGION_REPO_SHM_NAME)
+    
+    if init_shm is None:
+        # Fallback to old behavior if shared memory fails
+        logger.warning("Shared memory failed, falling back to process-local singleton")
+        logger.info("Creating process-local RegionRepository instance")
         _region_repository_instance = RegionRepository(db_manager)
+        return _region_repository_instance
+    
+    with _init_lock:
+        # Check if another process has already initialized the repository
+        if init_shm.buf[0] == 0:
+            # We're the first to initialize
+            logger.info("Creating global RegionRepository singleton instance (first process)")
+            _region_repository_instance = RegionRepository(db_manager)
+            # Mark as initialized for other processes
+            init_shm.buf[0] = 1
+        else:
+            # Another process already initialized it, create our local instance
+            logger.info("Creating process-local copy of RegionRepository singleton instance")
+            _region_repository_instance = RegionRepository(db_manager)
+    
+    # Clean up shared memory when no longer needed
+    init_shm.close()
+    
     return _region_repository_instance
+
+# Clean up function to be called at process exit
+def _cleanup_shared_memory():
+    """Cleanup shared memory at process exit."""
+    try:
+        # Only the parent process should cleanup the shared memory
+        if os.getpid() == os.getppid():
+            # Clean up flag shared memory
+            for name in [_CITY_REPO_SHM_NAME, _GEO_REPO_SHM_NAME, _REGION_REPO_SHM_NAME]:
+                try:
+                    shm = shared_memory.SharedMemory(name=name)
+                    shm.close()
+                    shm.unlink()
+                    logger.debug(f"Cleaned up shared memory flag: {name}")
+                except Exception as e:
+                    logger.debug(f"Error cleaning up shared memory flag {name}: {str(e)}")
+            
+            # Clean up data shared memory
+            for name in [_CITY_REPO_DATA_SHM_NAME, _GEO_REPO_DATA_SHM_NAME, _REGION_REPO_DATA_SHM_NAME]:
+                try:
+                    shm = shared_memory.SharedMemory(name=name)
+                    shm.close()
+                    shm.unlink()
+                    logger.debug(f"Cleaned up shared memory data: {name}")
+                except Exception as e:
+                    logger.debug(f"Error cleaning up shared memory data {name}: {str(e)}")
+    except Exception as e:
+        logger.error(f"Error in shared memory cleanup: {str(e)}")
+
+# Register cleanup handler
+import atexit
+atexit.register(_cleanup_shared_memory)
 
 class BaseRepository:
     """
@@ -142,12 +417,13 @@ class CityRepository(BaseRepository):
     Repository for city lookup by ID and search operations.
     """
     
-    def __init__(self, db_manager: DatabaseManager):
+    def __init__(self, db_manager: DatabaseManager, initialize: bool = True):
         """
         Initialize the repository with a database manager and load city data into memory.
         
         Args:
             db_manager: The database manager to use for database operations
+            initialize: Whether to load cities into memory (default: True)
         """
         super().__init__(db_manager)
         
@@ -163,7 +439,10 @@ class CityRepository(BaseRepository):
             self.ascii_trie = trie.CharTrie()
         
         # Load cities into memory for fast searching
-        self._load_cities()
+        if initialize:
+            start_time = time.time()
+            self._load_cities()
+            logger.info(f"Cities loaded in {time.time() - start_time:.2f} seconds")
         
     def _load_cities(self):
         """Load all cities into memory for fast search."""

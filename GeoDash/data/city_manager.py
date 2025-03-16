@@ -34,12 +34,13 @@ class CityData:
     a unified interface for city data operations.
     """
     
-    def __init__(self, db_uri: str = None):
+    def __init__(self, db_uri: str = None, persistent: bool = False):
         """
         Initialize the CityData manager.
         
         Args:
             db_uri: Database URI to connect to. If None, uses SQLite in the data directory.
+            persistent: Whether to keep database connections open (for worker processes)
         """
         # If no URI provided, use SQLite in data directory
         if db_uri is None:
@@ -47,34 +48,44 @@ class CityData:
             os.makedirs(data_dir, exist_ok=True)
             db_uri = f"sqlite:///{os.path.join(data_dir, 'cities.db')}"
             
-        logger.info(f"Initializing CityData with database URI: {db_uri}")
+        worker_id = os.environ.get('GUNICORN_WORKER_ID', 'standalone')
+        logger.info(f"Process {worker_id}: Initializing CityData with database URI: {db_uri} (persistent: {persistent})")
         
         # Initialize managers and repositories
-        self.db_manager = DatabaseManager(db_uri)
+        self.db_manager = DatabaseManager(db_uri, persistent=persistent)
         self.schema_manager = SchemaManager(self.db_manager)
         self.data_importer = CityDataImporter(self.db_manager)
         
-        # Use the singleton repository pattern to avoid loading cities multiple times
+        # Use the shared memory singleton repository pattern
+        logger.info(f"Process {worker_id}: Initializing repositories")
         self.city_repository = get_city_repository(self.db_manager)
         self.geo_repository = get_geo_repository(self.db_manager)
         self.region_repository = get_region_repository(self.db_manager)
         
-        # Ensure the schema exists
-        self.schema_manager.ensure_schema_exists()
+        # We should only check schema and import data in non-worker processes or standalone mode
+        # Workers should assume master has already verified the database
+        is_worker = worker_id != 'standalone'
         
-        # Check if database is empty and try to import data if needed
-        try:
-            count = self.get_table_info()['row_count']
-            if count == 0:
-                logger.info("Database is empty. Attempting to import city data...")
-                self.import_city_data()
-        except Exception as e:
-            logger.warning(f"Error checking database content: {e}. Will try to import data if needed.")
-            # Try to import data anyway
+        if not is_worker:
+            # Ensure the schema exists
+            self.schema_manager.ensure_schema_exists()
+            
+            # Check if database is empty and try to import data if needed
             try:
-                self.import_city_data()
-            except Exception as import_err:
-                logger.error(f"Failed to import city data during initialization: {import_err}")
+                count = self.get_table_info()['row_count']
+                if count == 0:
+                    logger.info("Database is empty. Attempting to import city data...")
+                    self.import_city_data()
+            except Exception as e:
+                logger.warning(f"Error checking database content: {e}. Will try to import data if needed.")
+                # Try to import data anyway
+                try:
+                    self.import_city_data()
+                except Exception as import_err:
+                    logger.error(f"Failed to import city data during initialization: {import_err}")
+        
+        # Keep track of persistence
+        self.persistent = persistent
     
     def import_city_data(self, csv_path: str = None, batch_size: int = 5000) -> bool:
         """
@@ -232,10 +243,17 @@ class CityData:
     def close(self):
         """
         Close the database connection.
+        
+        This should be called when the CityData instance is no longer needed
+        to release database resources. For persistent connections used by
+        worker processes, this is a no-op unless force=True.
         """
-        if self.db_manager:
-            self.db_manager.close()
-            
+        if hasattr(self, 'db_manager') and self.db_manager:
+            if not hasattr(self, 'persistent') or not self.persistent:
+                self.db_manager.close()
+                logger.debug("Closed non-persistent database connection")
+            # Persistent connections are kept open until the process exits
+    
     def __enter__(self):
         """
         Enter context manager.

@@ -14,6 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 import time
 from GeoDash.utils import log_error_with_github_info
+import re
 
 # Configure logging
 logging.basicConfig(
@@ -24,115 +25,146 @@ logger = logging.getLogger(__name__)
 
 class DatabaseManager:
     """
-    A class to manage database connections and schema for GeoDash.
+    Database manager for the GeoDash package.
     
-    This class handles the connections to either SQLite or PostgreSQL databases,
-    creates schemas, and provides utilities for database operations.
-    
-    Attributes:
-        db_uri (Optional[str]): Database URI connection string
-        conn: Database connection object
-        db_type (str): Type of database ('sqlite' or 'postgresql')
-        lock (threading.Lock): Lock for thread-safe database operations
+    This class provides a wrapper around SQLite and PostgreSQL database connections
+    for the GeoDash package.
     """
     
-    def __init__(self, db_uri: Optional[str] = None):
+    def __init__(self, db_uri: str, persistent: bool = False):
         """
-        Initialize the DatabaseManager with a connection to the specified database.
+        Initialize the database manager with a database URI.
         
         Args:
-            db_uri: Database URI. If None, a SQLite database will be created in the GeoDash module.
-                    For SQLite: 'sqlite:///path/to/db.sqlite'
-                    For PostgreSQL: 'postgresql://user:password@localhost:5432/dbname'
-                    
-        Raises:
-            ValueError: If an unsupported database URI is provided
-            ImportError: If psycopg2 is not installed when using PostgreSQL
+            db_uri: Database URI to connect to
+            persistent: Whether to keep the connection open (True) or close after use (False)
         """
         self.db_uri = db_uri
-        self.conn = None
-        self.db_type = ''
-        self.lock = threading.Lock()
+        self.db_type = self._get_db_type(db_uri)
+        self.persistent = persistent
+        self.connection = None
+        self._connection_lock = threading.Lock()
         
-        # Connect to the database
-        self._connect_to_db()
-        
-    def _connect_to_db(self):
+        if self.persistent:
+            # Immediately establish a persistent connection
+            self.connection = self._get_connection()
+            logger.info(f"Established persistent {self.db_type} connection")
+    
+    def __del__(self):
+        """Destructor to ensure connection is closed when object is garbage collected."""
+        self.close()
+    
+    def _get_db_type(self, db_uri: str) -> str:
         """
-        Connect to the specified database or create a new SQLite database.
+        Get the database type from the URI.
         
-        This method handles connection to either SQLite or PostgreSQL databases
-        based on the db_uri parameter provided during initialization.
-        
-        Raises:
-            ValueError: If an unsupported database URI is provided
-            ImportError: If psycopg2 is not installed when using PostgreSQL
+        Args:
+            db_uri: Database URI to parse
+            
+        Returns:
+            Database type: 'sqlite' or 'postgresql'
         """
-        try:
-            if self.db_uri is None:
-                # Create a SQLite database in the GeoDash module
-                db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'cities.sqlite')
-                os.makedirs(os.path.dirname(db_path), exist_ok=True)  # Ensure the data directory exists
-                logger.info(f"No DB URI provided. Creating SQLite database at {db_path}")
-                self.conn = sqlite3.connect(db_path, check_same_thread=False)
-                self.db_type = 'sqlite'
-            elif self.db_uri.startswith('sqlite:///'):
-                # Connect to the specified SQLite database
-                db_path = self.db_uri.replace('sqlite:///', '')
-                logger.info(f"Connecting to SQLite database at {db_path}")
-                self.conn = sqlite3.connect(db_path, check_same_thread=False)
-                self.db_type = 'sqlite'
-            elif self.db_uri.startswith('postgresql://'):
-                # Connect to the specified PostgreSQL database
-                try:
-                    import psycopg2
-                    logger.info(f"Connecting to PostgreSQL database at {self.db_uri}")
-                    self.conn = psycopg2.connect(self.db_uri.replace('postgresql://', ''))
-                    self.db_type = 'postgresql'
-                except ImportError:
-                    log_error_with_github_info(ImportError("psycopg2 is not installed"), "Database connection error")
-                    raise
-            else:
-                error = ValueError(f"Unsupported database URI: {self.db_uri}")
-                log_error_with_github_info(error, "Database connection error")
-                raise error
+        if db_uri.startswith('sqlite:'):
+            return 'sqlite'
+        elif db_uri.startswith('postgresql:'):
+            return 'postgresql'
+        else:
+            raise ValueError(f"Unsupported database URI: {db_uri}")
+    
+    def _get_connection(self):
+        """
+        Get a database connection.
+        
+        Returns:
+            Database connection
+        """
+        if self.persistent and self.connection is not None:
+            # Return the existing persistent connection
+            return self.connection
             
-            # Enable foreign keys for SQLite
-            if self.db_type == 'sqlite':
-                self.conn.execute("PRAGMA foreign_keys = ON")
-                # Enable WAL mode for better concurrent performance
-                self.conn.execute("PRAGMA journal_mode = WAL")
-                self.conn.execute("PRAGMA synchronous = NORMAL")
-        except Exception as e:
-            log_error_with_github_info(e, "Failed to connect to database")
-            raise
+        if self.db_type == 'sqlite':
+            # SQLite URI format: sqlite:///path/to/db.sqlite
+            import sqlite3
             
-    @contextmanager
+            # Extract the path from the URI
+            path = self.db_uri.replace('sqlite:///', '')
+            
+            logger.info(f"Connecting to SQLite database at {path}")
+            
+            # Create directory if it doesn't exist
+            os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+            
+            # Connect to the database (will create if it doesn't exist)
+            conn = sqlite3.connect(path)
+            
+            # Enable foreign keys
+            conn.execute('PRAGMA foreign_keys = ON')
+            
+            # Return row objects as dictionaries
+            conn.row_factory = sqlite3.Row
+            
+            return conn
+            
+        elif self.db_type == 'postgresql':
+            # PostgreSQL URI format: postgresql://user:pass@host:port/dbname
+            import psycopg2
+            from psycopg2.extras import RealDictCursor
+            
+            logger.info(f"Connecting to PostgreSQL database")
+            
+            # Extract connection parameters from the URI
+            match = re.match(r'postgresql://(?:(\w+)(?::([^@]+))?@)?([^:/]+)(?::(\d+))?/(\w+)', self.db_uri)
+            
+            if not match:
+                raise ValueError(f"Invalid PostgreSQL URI: {self.db_uri}")
+                
+            user, password, host, port, dbname = match.groups()
+            
+            # Set default values if not specified
+            if not port:
+                port = 5432
+                
+            # Connect to the database
+            conn = psycopg2.connect(
+                dbname=dbname,
+                user=user,
+                password=password,
+                host=host,
+                port=port
+            )
+            
+            return conn
+            
+        else:
+            raise ValueError(f"Unsupported database type: {self.db_type}")
+    
     def cursor(self):
         """
-        Context manager for database cursor operations.
+        Get a database cursor as a context manager.
         
-        This method ensures proper acquisition and release of the database lock,
-        and handles cursor creation and cleanup.
-        
-        Yields:
-            Database cursor object
-            
-        Example:
-            with db_manager.cursor() as cursor:
-                cursor.execute("SELECT * FROM city_data")
+        Returns:
+            Database cursor context manager
         """
-        with self.lock:
-            cursor = self.conn.cursor()
+        if self.persistent:
+            with self._connection_lock:
+                if self.connection is None or (hasattr(self.connection, 'closed') and self.connection.closed):
+                    self.connection = self._get_connection()
+                
+                # Create a PersistentCursor that wraps the cursor but doesn't close the connection
+                return PersistentCursor(self.connection.cursor(), self.connection)
+        
+        # For non-persistent connections, use the DatabaseCursor context manager
+        return DatabaseCursor(self)
+    
+    def close(self):
+        """Close the database connection if it exists."""
+        if self.connection and not self.persistent:
             try:
-                yield cursor
-                self.conn.commit()
+                self.connection.close()
             except Exception as e:
-                self.conn.rollback()
-                log_error_with_github_info(e, "Database operation failed")
-                raise
+                logger.error(f"Error closing database connection: {str(e)}")
             finally:
-                cursor.close()
+                self.connection = None
     
     def table_exists(self, table_name: str) -> bool:
         """
@@ -208,32 +240,6 @@ class DatabaseManager:
         with self.cursor() as cursor:
             cursor.executemany(query, params_list)
     
-    def close(self):
-        """
-        Close the database connection.
-        
-        This method should be called when the DatabaseManager instance is no longer needed
-        to properly release database resources.
-        """
-        if self.conn:
-            try:
-                self.conn.close()
-                logger.info("Closed database connection")
-            except Exception as e:
-                logger.error(f"Error closing database connection: {str(e)}")
-    
-    def __del__(self):
-        """Destructor to ensure the database connection is closed."""
-        self.close()
-        
-    def __enter__(self):
-        """Support for 'with' statement."""
-        return self
-        
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Support for 'with' statement."""
-        self.close()
-    
     def has_rtree_support(self) -> bool:
         """
         Check if the SQLite database supports R*Tree extension.
@@ -252,3 +258,84 @@ class DatabaseManager:
         except Exception as e:
             logger.warning(f"Error checking R*Tree support: {str(e)}")
             return False 
+
+class DatabaseCursor:
+    """
+    Context manager for database cursor operations for non-persistent connections.
+    
+    This class creates a new connection for each cursor operation and closes it
+    when the operation is completed, ensuring proper cleanup of resources.
+    """
+    
+    def __init__(self, db_manager: 'DatabaseManager'):
+        """
+        Initialize the cursor context manager.
+        
+        Args:
+            db_manager: Database manager to use for the connection
+        """
+        self.db_manager = db_manager
+        self.connection = None
+        self.cursor = None
+        
+    def __enter__(self):
+        """Enter the context manager and get a cursor."""
+        self.connection = self.db_manager._get_connection()
+        self.cursor = self.connection.cursor()
+        return self.cursor
+        
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Exit the context manager and clean up resources."""
+        try:
+            if exc_type is None:
+                # No exception occurred, commit the transaction
+                self.connection.commit()
+            else:
+                # An exception occurred, rollback the transaction
+                self.connection.rollback()
+        except Exception as e:
+            logger.error(f"Error committing/rolling back transaction: {str(e)}")
+        finally:
+            if self.cursor:
+                self.cursor.close()
+            if self.connection:
+                self.connection.close()
+
+class PersistentCursor:
+    """
+    Context manager for database cursor operations with persistent connections.
+    
+    This class wraps a cursor from a persistent connection, handling the commit/rollback
+    but not closing the connection when the operation is completed.
+    """
+    
+    def __init__(self, cursor, connection):
+        """
+        Initialize the persistent cursor context manager.
+        
+        Args:
+            cursor: The database cursor
+            connection: The persistent database connection
+        """
+        self.cursor = cursor
+        self.connection = connection
+        
+    def __enter__(self):
+        """Enter the context manager and return the cursor."""
+        return self.cursor
+        
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Exit the context manager and commit/rollback the transaction."""
+        try:
+            if exc_type is None:
+                # No exception occurred, commit the transaction
+                self.connection.commit()
+            else:
+                # An exception occurred, rollback the transaction
+                self.connection.rollback()
+        except Exception as e:
+            logger.error(f"Error committing/rolling back transaction: {str(e)}")
+        finally:
+            # Close only the cursor, not the connection
+            if self.cursor:
+                self.cursor.close() 

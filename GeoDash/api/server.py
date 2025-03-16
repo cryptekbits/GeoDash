@@ -10,6 +10,7 @@ import time
 import json
 from typing import Dict, Any, List, Union, Optional, Tuple
 from functools import wraps
+import os
 
 from flask import Flask, request, jsonify, Response, g, current_app
 import werkzeug.exceptions
@@ -40,19 +41,50 @@ def create_app(db_uri: Optional[str] = None) -> Flask:
     # Store database URI in app config
     app.config['DB_URI'] = db_uri
     
-    # Initialize city data at application startup
-    # This ensures the database is ready before any requests are made
-    logger.info("Pre-initializing city data database...")
+    # Worker identification
+    worker_id = os.environ.get('GUNICORN_WORKER_ID', 'standalone')
+    db_initialized = os.environ.get('GEODASH_DB_INITIALIZED') == '1'
+    
+    logger.info(f"Worker {worker_id}: Creating Flask application")
+    
+    # Create a persistent connection to the database for this worker
     try:
-        city_data = CityData(db_uri=db_uri)
-        # Check if we have cities loaded
+        start_time = time.time()
+        
+        # If no URI provided, use SQLite in data directory
+        if db_uri is None:
+            data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data')
+            os.makedirs(data_dir, exist_ok=True)
+            db_uri = f"sqlite:///{os.path.join(data_dir, 'cities.db')}"
+        
+        # Create a persistent CityData instance that will use pre-initialized data
+        # if available from the master process
+        city_data = CityData(db_uri=db_uri, persistent=True)
+        
+        # Store in app context for reuse in all requests
+        app.config['CITY_DATA_INSTANCE'] = city_data
+        
+        # Check if data is properly loaded
         table_info = city_data.get_table_info()
         record_count = table_info.get('row_count', 0)
+        init_time = time.time() - start_time
+        
         app.config['INITIALIZED'] = True
-        logger.info(f"Database initialized with {record_count} city records")
-        city_data.close()
+        
+        # Log some stats
+        logger.info(f"Worker {worker_id}: Connected to database with {record_count} city records in {init_time:.2f}s")
+        
+        # Log memory usage if available
+        try:
+            import psutil
+            process = psutil.Process(os.getpid())
+            memory_info = process.memory_info()
+            logger.info(f"Worker {worker_id}: Memory usage: {memory_info.rss / (1024 * 1024):.1f} MB")
+        except ImportError:
+            logger.debug("psutil not available for memory usage tracking")
+        
     except Exception as e:
-        log_error_with_github_info(e, "Failed to pre-initialize database")
+        log_error_with_github_info(e, f"Worker {worker_id}: Failed to initialize database")
         app.config['INITIALIZED'] = False
     
     # Configure JSON responses
@@ -122,8 +154,13 @@ def get_city_data() -> CityData:
     Returns:
         CityData instance initialized with the application's DB URI
     """
-    # Database should already be initialized at startup
-    # This just creates a new connection for this request
+    # Use the persistent instance created at application startup
+    if 'CITY_DATA_INSTANCE' in current_app.config:
+        return current_app.config['CITY_DATA_INSTANCE']
+    
+    # Fallback to creating a new instance if not found in app context
+    # This should rarely happen and is just a safety measure
+    logger.warning("Creating new CityData instance - persistent instance not found in app context")
     return CityData(db_uri=current_app.config.get('DB_URI'))
 
 def validate_params(required_params: Optional[List[str]] = None,
