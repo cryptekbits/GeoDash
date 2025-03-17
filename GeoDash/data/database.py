@@ -92,7 +92,11 @@ class ConnectionPool:
         elif db_uri.startswith('postgresql:'):
             return 'postgresql'
         else:
-            raise ConfigurationError(f"Unsupported database URI: {db_uri}")
+            raise ConfigurationError(
+                message=f"Technical error: Unsupported database URI: {db_uri}",
+                user_message="The database configuration is invalid.",
+                context={"db_uri": db_uri}
+            )
     
     def _create_new_connection(self) -> Any:
         """
@@ -360,13 +364,20 @@ class DatabaseManager:
             
         Returns:
             Database type: 'sqlite' or 'postgresql'
+            
+        Raises:
+            ConfigurationError: If the database URI is not supported
         """
         if db_uri.startswith('sqlite:'):
             return 'sqlite'
         elif db_uri.startswith('postgresql:'):
             return 'postgresql'
         else:
-            raise ConfigurationError(f"Unsupported database URI: {db_uri}")
+            raise ConfigurationError(
+                message=f"Technical error: Unsupported database URI: {db_uri}",
+                user_message="The database configuration is invalid.",
+                context={"db_uri": db_uri}
+            )
     
     def _check_connection(self):
         """

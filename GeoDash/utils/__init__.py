@@ -8,9 +8,12 @@ including JSON formatting, output formatting, and other helper functions.
 import json
 import sys
 import traceback
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Type
+import urllib.parse
 
 from GeoDash.utils.logging import get_logger
+from GeoDash.exceptions import GeoDataError
+import logging
 
 # Get a logger for this module
 logger = get_logger(__name__)
@@ -67,7 +70,6 @@ def log_error_with_github_info(error: Exception, additional_context: Optional[st
 """
     
     # URL-encode the issue title and body for the GitHub URL
-    import urllib.parse
     encoded_title = urllib.parse.quote(issue_title)
     encoded_body = urllib.parse.quote(issue_body)
     
@@ -84,6 +86,77 @@ def log_error_with_github_info(error: Exception, additional_context: Optional[st
     
     # Print to stderr for better visibility
     print(github_message, file=sys.stderr)
+
+def handle_exception(
+    e: Exception,
+    logger: Optional[logging.Logger] = None,
+    error_class: Optional[Type[GeoDataError]] = None,
+    user_message: Optional[str] = None,
+    context: Optional[Dict[str, Any]] = None,
+    report_to_github: bool = False,
+    log_level: int = logging.ERROR
+) -> Union[GeoDataError, Exception]:
+    """
+    Handle an exception consistently across the application.
+    
+    This function:
+    1. Logs the error with appropriate context
+    2. Optionally reports to GitHub issues
+    3. Converts to a GeoDataError if requested
+    
+    Args:
+        e: The exception to handle
+        logger: Optional logger instance to use
+        error_class: Optional GeoDataError class to convert to
+        user_message: Optional user-friendly message to use
+        context: Optional additional context to include
+        report_to_github: Whether to report this error to GitHub issues
+        log_level: Log level to use
+        
+    Returns:
+        Either the original exception or a new GeoDataError instance
+    """
+    # Create context dict if not provided
+    if context is None:
+        context = {}
+    
+    # Get traceback info
+    tb_str = traceback.format_exc()
+    
+    # Log the error
+    if logger:
+        if log_level == logging.ERROR:
+            logger.error(f"Error: {str(e)}\nTraceback: {tb_str}")
+        elif log_level == logging.WARNING:
+            logger.warning(f"Warning: {str(e)}\nTraceback: {tb_str}")
+        elif log_level == logging.CRITICAL:
+            logger.critical(f"Critical: {str(e)}\nTraceback: {tb_str}")
+        else:
+            logger.error(f"Error: {str(e)}\nTraceback: {tb_str}")
+    
+    # Report to GitHub if requested
+    if report_to_github:
+        log_error_with_github_info(e, user_message or str(e))
+    
+    # Convert to a GeoDataError if requested
+    if error_class and not isinstance(e, error_class):
+        return error_class(
+            message=f"Exception: {str(e)}",
+            user_message=user_message or error_class.user_message,
+            context=context,
+            cause=e,
+            include_traceback=True
+        )
+    
+    # If already a GeoDataError but we want to add more context
+    if isinstance(e, GeoDataError) and (context or user_message):
+        if context:
+            e.context.update(context)
+        if user_message:
+            e.user_message = user_message
+    
+    # Return either the original exception or the new one
+    return e
 
 def format_json(data: Any, indent: int = 2, sort_keys: bool = False) -> str:
     """

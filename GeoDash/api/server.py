@@ -19,13 +19,15 @@ from GeoDash.data.repositories import cleanup_shared_memory
 from GeoDash.services.city_service import CityService
 from GeoDash.utils import log_error_with_github_info
 from GeoDash.utils.logging import get_logger
+from GeoDash.exceptions import GeoDataError, InvalidParameterError
 
 # Get a logger for this module
 logger = get_logger(__name__)
 
 def format_response(data: Any = None, message: str = None, 
                    error: str = None, status_code: int = 200, 
-                   meta: Dict[str, Any] = None) -> Tuple[Dict[str, Any], int]:
+                   meta: Dict[str, Any] = None,
+                   error_code: str = None) -> Tuple[Dict[str, Any], int]:
     """
     Format API response in a standardized structure.
     
@@ -35,6 +37,7 @@ def format_response(data: Any = None, message: str = None,
         error: Optional error message
         status_code: HTTP status code
         meta: Optional metadata dictionary
+        error_code: Optional error code identifier
         
     Returns:
         Tuple of (response_dict, status_code)
@@ -49,9 +52,12 @@ def format_response(data: Any = None, message: str = None,
     
     if message:
         response['message'] = message
-        
+    
     if error:
         response['error'] = error
+        
+    if error_code:
+        response['error_code'] = error_code
     
     if meta:
         response['meta'] = meta
@@ -111,20 +117,29 @@ def api_response(f: Callable) -> Callable:
     
     return decorated_function
 
-def create_app(db_uri: Optional[str] = None) -> Flask:
+def create_app(db_uri: Optional[str] = None, debug: bool = False) -> Flask:
     """
-    Create and configure the Flask application.
+    Create and configure a Flask application instance.
     
     Args:
-        db_uri: Database URI for city data
+        db_uri: Optional database URI to use for the app
+        debug: Enable debug mode with additional error information
         
     Returns:
-        Configured Flask application
+        A configured Flask application
     """
     app = Flask(__name__)
     
-    # Store database URI in app config
-    app.config['DB_URI'] = db_uri
+    # Configure the app
+    app.config.update(
+        JSONIFY_PRETTYPRINT_REGULAR=True,
+        JSON_SORT_KEYS=False,
+        DEBUG=debug
+    )
+    
+    # Store the database URI in the app config
+    if db_uri:
+        app.config['DATABASE_URI'] = db_uri
     
     # Worker identification
     worker_id = os.environ.get('GUNICORN_WORKER_ID', 'standalone')
@@ -206,7 +221,9 @@ def create_app(db_uri: Optional[str] = None) -> Flask:
         return format_response(
             error='Bad Request',
             message=str(error.description),
-            status_code=400
+            status_code=400,
+            error_code="GD-API-3004",  # Using our InvalidParameterError code
+            meta={'debug_info': str(error)} if debug else None
         )
     
     @app.errorhandler(werkzeug.exceptions.NotFound)
@@ -215,7 +232,33 @@ def create_app(db_uri: Optional[str] = None) -> Flask:
         return format_response(
             error='Not Found',
             message=str(error.description),
-            status_code=404
+            status_code=404,
+            error_code="GD-DATA-2002",  # Using our DataNotFoundError code
+            meta={'debug_info': str(error)} if debug else None
+        )
+    
+    @app.errorhandler(GeoDataError)
+    def handle_geodata_error(error: GeoDataError) -> Tuple[Dict[str, Any], int]:
+        """Handle GeoDash-specific exceptions."""
+        # Log the technical details
+        if hasattr(error, 'traceback') and error.traceback:
+            logger.error(f"GeoDash Error: {error.error_code} - {error.message}\n{error.traceback}")
+        else:
+            logger.error(f"GeoDash Error: {error.error_code} - {error.message}")
+            
+        # Include debug context in the error response
+        error.context['debug'] = debug
+            
+        # Get the error details as a dictionary
+        error_dict = error.to_dict()
+        
+        # Return user-friendly response
+        return format_response(
+            error=error.__class__.__name__,
+            message=error.user_message,
+            status_code=error.status_code,
+            error_code=error.error_code,
+            meta=error_dict.get('technical_details') if debug else None
         )
     
     @app.errorhandler(Exception)
@@ -224,11 +267,24 @@ def create_app(db_uri: Optional[str] = None) -> Flask:
         # Use the GitHub issue reporting function for unhandled exceptions
         log_error_with_github_info(error, "Unhandled server exception")
         
-        return format_response(
-            error='Internal Server Error',
-            message='An unexpected error occurred',
-            status_code=500
-        )
+        # Convert to a GeoDataError if it's not already one of our exceptions
+        if not isinstance(error, GeoDataError):
+            # Create a generic system error with the original exception as the cause
+            error_msg = str(error)
+            debug_context = {'debug': debug}
+            
+            system_error = GeoDataError(
+                message=f"Unhandled exception: {error_msg}",
+                user_message="An unexpected error occurred. Our team has been notified.",
+                error_code="GD-SYS-5000",  # Special code for unhandled exceptions
+                status_code=500,
+                context=debug_context,
+                cause=error
+            )
+            return handle_geodata_error(system_error)
+        
+        # If it's already a GeoDataError, just delegate to that handler
+        return handle_geodata_error(error)
     
     # Register API routes
     register_routes(app)
@@ -252,64 +308,70 @@ def get_city_service() -> CityService:
         return current_app.config['CITY_SERVICE_INSTANCE']
     
     # Fall back to creating a new instance if no shared one exists
-    db_uri = current_app.config.get('DB_URI')
+    db_uri = current_app.config.get('DATABASE_URI')
     return CityService(db_uri=db_uri)
 
 def validate_params(required_params: Optional[List[str]] = None,
                     numeric_params: Optional[List[str]] = None,
                     max_limit: Optional[int] = None):
     """
-    Decorator to validate request parameters.
+    Decorator for validating request parameters.
     
     Args:
-        required_params: List of parameter names that must be present
-        numeric_params: List of parameter names that must be numeric
+        required_params: List of required parameter names
+        numeric_params: List of parameters that must be numeric
         max_limit: Maximum value for the 'limit' parameter
+        
+    Returns:
+        A decorated function
     """
     def decorator(f):
         @wraps(f)
         def decorated_function(*args, **kwargs):
             # Get combined parameters from args and query string
-            params = request.args.to_dict()
+            params = {}
+            if request.args:
+                params.update(request.args.to_dict())
+            params.update(kwargs)
             
-            # Check for required parameters
+            errors = []
+            
+            # Check required parameters
             if required_params:
                 for param in required_params:
-                    if param not in params:
-                        return format_response(
-                            error='Missing Required Parameter',
-                            message=f"Parameter '{param}' is required",
-                            status_code=400
-                        )
+                    if param not in params or not params[param]:
+                        errors.append(f"Missing required parameter: {param}")
             
-            # Check for numeric parameters
+            # Check numeric parameters
             if numeric_params:
                 for param in numeric_params:
-                    if param in params:
+                    if param in params and params[param]:
                         try:
                             float(params[param])
                         except ValueError:
-                            return format_response(
-                                error='Invalid Parameter',
-                                message=f"Parameter '{param}' must be numeric",
-                                status_code=400
-                            )
+                            errors.append(f"Parameter must be numeric: {param}")
             
             # Check limit parameter
-            if max_limit and 'limit' in params:
+            if max_limit and 'limit' in params and params['limit']:
                 try:
                     limit = int(params['limit'])
                     if limit > max_limit:
-                        return format_response(
-                            error='Parameter Limit Exceeded',
-                            message=f"Parameter 'limit' cannot exceed {max_limit}",
-                            status_code=400
-                        )
+                        errors.append(f"Limit exceeds maximum of {max_limit}")
                 except ValueError:
-                    pass  # Already checked in numeric_params
+                    errors.append("Limit must be an integer")
+            
+            # If there are validation errors, raise InvalidParameterError
+            if errors:
+                raise InvalidParameterError(
+                    message=f"Validation errors: {', '.join(errors)}",
+                    user_message=f"Invalid parameters: {', '.join(errors)}",
+                    context={'errors': errors}
+                )
             
             return f(*args, **kwargs)
+        
         return decorated_function
+    
     return decorator
 
 def register_routes(app: Flask) -> None:
@@ -735,7 +797,7 @@ def start_server(host: str = '0.0.0.0', port: int = 5000,
         db_uri: Database URI for city data
         debug: Whether to run in debug mode
     """
-    app = create_app(db_uri)
+    app = create_app(db_uri, debug)
     
     # Check if the database is ready
     if app.config.get('INITIALIZED', False):

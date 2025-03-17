@@ -97,7 +97,12 @@ def download_city_data(force: bool = False, url: Optional[str] = None) -> str:
         return csv_path
     except Exception as e:
         logger.error(f"Failed to download cities.csv: {e}")
-        raise DataImportError(f"Failed to download cities.csv: {e}")
+        raise DataImportError(
+            message=f"Technical error downloading cities.csv: {str(e)}",
+            user_message="Failed to download necessary data. Please check your internet connection.",
+            context={"url": url, "destination": str(csv_path)},
+            cause=e
+        )
 
 class CityDataImporter:
     """
@@ -143,7 +148,11 @@ class CityDataImporter:
             
             # If still not found, raise an error
             if csv_path is None:
-                raise DataNotFoundError("City data CSV file not found and download not allowed.")
+                raise DataNotFoundError(
+                    message="CSV file not found and automatic download is disabled",
+                    user_message="City data file could not be found and automatic download is disabled.",
+                    context={"download_allowed": download_if_missing}
+                )
         
         # Ensure the CSV file exists
         if not os.path.exists(csv_path):
@@ -151,7 +160,11 @@ class CityDataImporter:
                 logger.warning(f"CSV file not found at {csv_path}. Downloading...")
                 csv_path = download_city_data(force=True)
             else:
-                raise DataNotFoundError(f"City data CSV file not found at {csv_path}")
+                raise DataNotFoundError(
+                    message=f"Technical error: City data CSV file not found at {csv_path}",
+                    user_message="Required city data file could not be found.",
+                    context={"csv_path": str(csv_path)}
+                )
         
         logger.info(f"Importing city data from {csv_path}")
         
@@ -191,7 +204,12 @@ class CityDataImporter:
         except Exception as e:
             elapsed = time.time() - start_time
             logger.error(f"Failed to import city data after {elapsed:.2f} seconds: {str(e)}")
-            raise DataImportError(f"Failed to import city data: {str(e)}")
+            raise DataImportError(
+                message=f"Technical error importing city data: {str(e)}",
+                user_message="Failed to import city data. The data may be in an incorrect format.",
+                context={"elapsed_time": f"{elapsed:.2f} seconds", "csv_path": str(csv_path)},
+                cause=e
+            )
     
     def _find_csv_file(self) -> Optional[str]:
         """
