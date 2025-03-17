@@ -10,9 +10,13 @@ import os
 import tempfile
 import shutil
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from GeoDash.data.importer import download_city_data, import_city_data
+from GeoDash.data.database import DatabaseManager
+from GeoDash.utils.logging import get_logger, set_log_level
+
+# Set up logging for tests
+set_log_level('warning')
+logger = get_logger(__name__, {"component": "tests"})
 
 def test_import():
     """Test importing the GeoDash module."""

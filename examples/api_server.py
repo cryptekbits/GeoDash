@@ -5,15 +5,15 @@ Example showing how to run the GeoDash module as an API server.
 This script starts a Flask server that provides REST API endpoints
 for accessing the city data functionality.
 """
-import logging
 import argparse
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Now import from GeoDash
+# Import GeoDash components
 from GeoDash import start_server
+from GeoDash.utils.logging import get_logger, set_log_level
+
+# Configure logging
+set_log_level('info')
+logger = get_logger(__name__, {"component": "api_example"})
 
 def main():
     """Main entry point for the API server example."""

@@ -1,18 +1,25 @@
 #!/usr/bin/env python3
 """
-Main entry point for the GeoDash package.
-This allows running the package directly with `python -m`.
+Main entry point for the GeoDash package when run as a program.
+This module is executed when the package is run directly with:
+    python -m GeoDash
 """
-import os
+
 import sys
+from GeoDash.utils.logging import get_logger, set_log_level
 
-# Add the parent directory to the path if not already there
-# This ensures the GeoDash module can be found regardless of how it's run
-parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
+# Configure logging
+set_log_level('info')
+logger = get_logger(__name__, {"component": "main"})
 
-from GeoDash.cli.commands import main
+def main():
+    """Main entry point when run as a program."""
+    try:
+        from GeoDash.__main__ import main as geodash_main
+        return geodash_main()
+    except ImportError as e:
+        logger.error(f"Failed to import GeoDash: {e}")
+        sys.exit(1)
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main() 

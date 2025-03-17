@@ -303,6 +303,61 @@ pip install -e .
 
 MIT 
 
+## Logging
+
+GeoDash uses a centralized logging system that provides structured logging with consistent fields. The logging system can output in either JSON format (for better machine processing) or traditional text format.
+
+### Basic Usage
+
+```python
+from GeoDash.utils.logging import get_logger
+
+# Get a logger with the current module name
+logger = get_logger(__name__)
+
+# Log at different levels
+logger.debug("Debug message")
+logger.info("Processing started")
+logger.warning("Warning about something")
+logger.error("An error occurred")
+```
+
+### Structured Logging
+
+The logging system supports structured logging with consistent fields. You can add context to your logs:
+
+```python
+# Add component context when getting the logger
+logger = get_logger(__name__, {"component": "data_importer"})
+
+# Add context to individual log messages
+logger.info("Importing cities", extra={"city_count": 500, "source": "cities.csv"})
+```
+
+### Configuration
+
+You can configure the logging system:
+
+```python
+from GeoDash.utils.logging import configure_logging, set_log_level
+
+# Set log level
+set_log_level('debug')  # or 'info', 'warning', 'error', 'critical'
+
+# More advanced configuration
+configure_logging(
+    level='info',
+    use_json=True,  # Use JSON structured logging
+    log_file='/path/to/log.json'  # Optional log file
+)
+```
+
+You can also configure logging via environment variables:
+
+- `GEODASH_LOG_LEVEL`: Set the log level ('debug', 'info', 'warning', 'error', 'critical')
+- `GEODASH_LOG_FORMAT`: Set the log format ('json' or 'text')
+- `GEODASH_LOG_FILE`: Path to a log file
+
 ## Logging Configuration
 
 GeoDash uses a centralized logging system that can be configured in several ways:

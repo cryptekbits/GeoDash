@@ -18,7 +18,16 @@ project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 sys.path.insert(0, project_root)
 
 # Configure logging
-logger = logging.getLogger("geodash.gunicorn")
+from GeoDash.utils.logging import get_logger, configure_logging
+
+# Set up logging with proper configuration
+configure_logging(
+    level=os.environ.get('GEODASH_LOG_LEVEL', 'info'),
+    use_json=os.environ.get('GEODASH_LOG_FORMAT', 'json').lower() == 'json',
+    log_file=os.environ.get('GEODASH_LOG_FILE')
+)
+
+logger = get_logger("geodash.gunicorn", {"component": "gunicorn"})
 
 # Bind to all interfaces on port 5000
 bind = "0.0.0.0:32000"

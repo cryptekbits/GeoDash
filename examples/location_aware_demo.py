@@ -7,13 +7,14 @@ This script demonstrates how search results are prioritized based on user locati
 
 import json
 import time
-import logging
 
+# Import from GeoDash
 from GeoDash.data.city_manager import CityData
+from GeoDash.utils.logging import get_logger, set_log_level
 
 # Set up logging - only show warnings and errors
-logging.basicConfig(level=logging.WARNING, 
-                   format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+set_log_level('warning')
+logger = get_logger(__name__, {"component": "demo"})
 
 def print_json(data):
     """Print data in a formatted JSON style."""

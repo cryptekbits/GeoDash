@@ -13,10 +13,9 @@ import multiprocessing as mp
 from multiprocessing import shared_memory
 import atexit
 import tempfile
+import json
 
-# Add parent directory to path to import GeoDash
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
+from GeoDash.utils.logging import get_logger, set_log_level
 from GeoDash.data.repositories import (
     get_city_repository, 
     get_geo_repository, 
@@ -29,19 +28,34 @@ from GeoDash.data.repositories import (
     _REGION_REPO_DATA_SHM_NAME,
     _shm_reference_counts,
     _shm_ref_lock,
+    _create_or_get_shared_data,
+    _serialize_to_shared_memory,
+    _deserialize_from_shared_memory,
+    cleanup_shared_memory
 )
 from GeoDash.data.database import DatabaseManager
 
-# Configure logging
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(process)d - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger("shared_memory_test")
+# Set up logging for tests
+set_log_level('warning')
+logger = get_logger("shared_memory_test", {"component": "tests"})
 
 # Create a temporary database file for testing
 db_file = os.path.join(tempfile.gettempdir(), 'geodash_test.db')
 DB_URI = f"sqlite:///{db_file}"
+
+# Sample data for testing shared memory
+TEST_DATA = {
+    'cities': [
+        {'id': 1, 'name': 'New York', 'population': 8398748},
+        {'id': 2, 'name': 'Los Angeles', 'population': 3990456},
+        {'id': 3, 'name': 'Chicago', 'population': 2705994},
+    ],
+    'stats': {
+        'total_population': 15095198,
+        'average_population': 5031733,
+        'city_count': 3
+    }
+}
 
 def worker_process(worker_id):
     """Worker process that creates and uses repositories."""

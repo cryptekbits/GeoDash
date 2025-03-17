@@ -5,7 +5,6 @@ This module provides repository classes for accessing and querying city data
 in the GeoDash database.
 """
 
-import logging
 import math
 from typing import Dict, List, Any, Tuple, Optional, Union, ClassVar, Type, TypeVar, Set
 from functools import lru_cache
@@ -21,6 +20,7 @@ import tempfile
 import atexit
 
 from GeoDash.data.database import DatabaseManager
+from GeoDash.utils.logging import get_logger
 
 # For fuzzy matching support (rapidfuzz is significantly faster than fuzzywuzzy)
 try:
@@ -29,7 +29,8 @@ try:
 except ImportError:
     from fuzzywuzzy import fuzz, process
     USING_RAPIDFUZZ = False
-    logging.warning("rapidfuzz not found, using slower fuzzywuzzy. Install rapidfuzz for better performance.")
+    logger = get_logger(__name__)
+    logger.warning("rapidfuzz not found, using slower fuzzywuzzy. Install rapidfuzz for better performance.")
 
 # For trie implementation
 try:
@@ -37,14 +38,11 @@ try:
     USING_TRIE = True
 except ImportError:
     USING_TRIE = False
-    logging.warning("pygtrie not found, using slower dictionary lookups. Install pygtrie for better performance.")
+    logger = get_logger(__name__)
+    logger.warning("pygtrie not found, using slower dictionary lookups. Install pygtrie for better performance.")
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Get logger for this module
+logger = get_logger(__name__, {"component": "repositories"})
 
 # Shared memory initialization lock
 _init_lock = Lock()

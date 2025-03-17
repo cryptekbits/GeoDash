@@ -3,15 +3,19 @@
 Test script to verify the installation process and data file inclusion.
 This test should be run after the package is installed with pip.
 """
-import logging
+import unittest
+import tempfile
 import os
 import sys
+import shutil
 import importlib
 import pkg_resources
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from GeoDash.utils.logging import get_logger, set_log_level
+
+# Set up logging for tests
+set_log_level('warning')
+logger = get_logger(__name__, {"component": "tests"})
 
 def test_package_installation():
     """Test that the package is installed correctly."""
@@ -136,14 +140,17 @@ def test_runtime_data_access():
         logger.error(f"Runtime data access test failed: {e}")
         return False
 
+class TestInstallation(unittest.TestCase):
+    """Test cases for installation."""
+
+    def test_package_installation(self):
+        self.assertTrue(test_package_installation())
+
+    def test_data_files_inclusion(self):
+        self.assertTrue(test_data_files_inclusion())
+
+    def test_runtime_data_access(self):
+        self.assertTrue(test_runtime_data_access())
+
 if __name__ == '__main__':
-    installation_success = test_package_installation()
-    data_files_success = test_data_files_inclusion()
-    runtime_success = test_runtime_data_access()
-    
-    if installation_success and data_files_success and runtime_success:
-        logger.info("All installation tests passed!")
-        sys.exit(0)
-    else:
-        logger.error("Installation tests failed")
-        sys.exit(1) 
+    unittest.main() 
