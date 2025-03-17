@@ -111,14 +111,14 @@ with open("README.md", "r", encoding="utf-8") as fh:
 setup(
     name="GeoDash",
     version=version,
-    author="GeoDash Team",
-    author_email="your.email@example.com",
+    author="Manan Ramnani",
+    author_email="email@cryptek.dev",
     description="A Python module for managing city data with fast coordinate queries and autocomplete functionality",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/yourusername/GeoDash",
+    url="https://github.com/cryptekbits/GeoDash-py",
     project_urls={
-        "Bug Tracker": "https://github.com/yourusername/GeoDash/issues",
+        "Bug Tracker": "https://github.com/cryptekbits/GeoDash-py/issues",
     },
     classifiers=[
         "Programming Language :: Python :: 3",
