@@ -12,14 +12,10 @@ Example:
 """
 
 import sys
-import logging
+from GeoDash.utils.logging import get_logger
 
-# Configure logging with proper format
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Get a logger for this module
+logger = get_logger(__name__)
 
 def main():
     """Main entry point for the GeoDash package."""

@@ -6,17 +6,14 @@ including JSON formatting, output formatting, and other helper functions.
 """
 
 import json
-import logging
 import sys
 import traceback
 from typing import Any, Dict, List, Optional, Union
 
-# Configure logging with proper format
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+from GeoDash.utils.logging import get_logger
+
+# Get a logger for this module
+logger = get_logger(__name__)
 
 # GitHub repository information
 GITHUB_REPO_URL = "https://github.com/cryptekbits/GeoDash-py"

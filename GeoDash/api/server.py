@@ -5,7 +5,6 @@ This module provides a Flask-based API server for accessing city data
 through RESTful API endpoints.
 """
 
-import logging
 import time
 import json
 from typing import Dict, Any, List, Union, Optional, Tuple
@@ -18,13 +17,10 @@ import werkzeug.exceptions
 from GeoDash.data import CityData
 from GeoDash.data.database import DatabaseManager
 from GeoDash.utils import log_error_with_github_info
+from GeoDash.utils.logging import get_logger
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Get a logger for this module
+logger = get_logger(__name__)
 
 def create_app(db_uri: Optional[str] = None) -> Flask:
     """

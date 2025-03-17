@@ -286,3 +286,67 @@ pip install -e .
 ## License
 
 MIT 
+
+## Logging Configuration
+
+GeoDash uses a centralized logging system that can be configured in several ways:
+
+### Setting the Log Level Programmatically
+
+```python
+from GeoDash import set_log_level
+
+# Use string constants
+set_log_level('debug')  # Show all debug logs
+set_log_level('info')   # Default level
+set_log_level('warning')
+set_log_level('error')
+set_log_level('critical')
+
+# Or use Python's logging constants
+import logging
+set_log_level(logging.DEBUG)
+```
+
+### Setting the Log Level via Command Line
+
+All CLI commands support the `--log-level` option:
+
+```bash
+# Search for cities with debug logs enabled
+python -m GeoDash search "New York" --log-level debug
+
+# Start the server with warning level (fewer logs)
+python -m GeoDash server --log-level warning
+```
+
+### Setting the Log Level via Environment Variable
+
+You can set the log level using the `GEODASH_LOG_LEVEL` environment variable:
+
+```bash
+# Set log level to debug
+export GEODASH_LOG_LEVEL=debug
+python -m GeoDash search "New York"
+
+# One-time setting
+GEODASH_LOG_LEVEL=debug python -m GeoDash search "New York"
+```
+
+### Using the Logger in Your Code
+
+If you're extending GeoDash or writing plugins, use the provided logging utilities:
+
+```python
+from GeoDash.utils.logging import get_logger
+
+# Get a logger for your module
+logger = get_logger(__name__)
+
+# Use standard logging methods
+logger.debug("Detailed debugging information")
+logger.info("General information")
+logger.warning("Warning message")
+logger.error("Error message")
+logger.critical("Critical error")
+``` 

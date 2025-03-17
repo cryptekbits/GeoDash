@@ -4,16 +4,12 @@ Schema management module for the GeoDash package.
 This module provides schema definitions and management for the GeoDash database.
 """
 
-import logging
 from typing import List, Dict, Any, Optional, Tuple, Set, Union, cast
 from GeoDash.data.database import DatabaseManager
+from GeoDash.utils.logging import get_logger
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Get a logger for this module
+logger = get_logger(__name__)
 
 class SchemaManager:
     """

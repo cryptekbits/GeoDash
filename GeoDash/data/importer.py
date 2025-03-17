@@ -6,7 +6,6 @@ into the GeoDash database.
 """
 
 import os
-import logging
 import time
 import pandas as pd
 import urllib.request
@@ -16,13 +15,10 @@ from pathlib import Path
 
 from GeoDash.data.database import DatabaseManager
 from GeoDash.exceptions import DataImportError, DataNotFoundError, ValidationError
+from GeoDash.utils.logging import get_logger
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Get a logger for this module
+logger = get_logger(__name__)
 
 def get_data_directory() -> str:
     """

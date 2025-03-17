@@ -4,14 +4,13 @@ Entry point for the GeoDash API server.
 This allows running the server directly with `python server.py`.
 """
 import argparse
-import logging
 from typing import Optional
 
 from GeoDash.api.server import start_server
+from GeoDash.utils.logging import get_logger, set_log_level
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Get a logger for this module
+logger = get_logger(__name__)
 
 def main():
     """Entry point for the server."""
@@ -20,8 +19,14 @@ def main():
     parser.add_argument('--port', type=int, default=5000, help='The port to bind to')
     parser.add_argument('--db-uri', type=str, help='The database URI')
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
+    parser.add_argument('--log-level', choices=['debug', 'info', 'warning', 'error', 'critical'], 
+                        default='info', help='Set the logging level')
     
     args = parser.parse_args()
+    
+    # Set the log level if specified
+    if args.log_level:
+        set_log_level(args.log_level)
     
     logger.info(f"Starting server on {args.host}:{args.port}")
     
@@ -32,5 +37,5 @@ def main():
         debug=args.debug
     )
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main() 

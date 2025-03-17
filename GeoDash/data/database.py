@@ -7,25 +7,21 @@ and operations for the GeoDash package. It supports both SQLite and PostgreSQL.
 
 import os
 import sqlite3
-import logging
 import threading
 from typing import Optional, Any, Dict, Tuple, List, Union, Iterator, TypeVar, Type, cast, ContextManager, Generator, Callable
 from contextlib import contextmanager
 from pathlib import Path
 import time
-from GeoDash.utils import log_error_with_github_info
 import re
+from GeoDash.utils import log_error_with_github_info
+from GeoDash.utils.logging import get_logger
 from GeoDash.exceptions import (
     DatabaseError, ConnectionError, QueryError, 
     TransactionError, ConfigurationError
 )
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Get a logger for this module
+logger = get_logger(__name__)
 
 T = TypeVar('T', bound='DatabaseManager')
 

@@ -6,7 +6,6 @@ This module provides CLI commands for accessing city data from the command line.
 
 import sys
 import json
-import logging
 from typing import Any, Dict, List, Optional
 
 import click
@@ -14,17 +13,26 @@ import click
 from GeoDash.data import CityData
 from GeoDash.api.server import start_server
 from GeoDash.utils import log_error_with_github_info
+from GeoDash.utils.logging import get_logger, set_log_level
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Get a logger for this module
+logger = get_logger(__name__)
 
 # Common options
 def db_uri_option(f):
     return click.option('--db-uri', help='Database URI (e.g., sqlite:///cities.db or postgresql://user:pass@localhost/cities)')(f)
+
+# Add an option for setting the log level to all commands
+def log_level_option(f):
+    return click.option('--log-level', 
+                      type=click.Choice(['debug', 'info', 'warning', 'error', 'critical'], case_sensitive=False),
+                      help='Set the logging level')(f)
+
+# Apply the log level if specified in the command options
+def apply_log_level(ctx, param, value):
+    if value:
+        set_log_level(value)
+    return value
 
 @click.group()
 def cli():
@@ -36,7 +44,8 @@ def cli():
 @click.option('--limit', type=int, default=10, help='Maximum number of results (default: 10)')
 @click.option('--country', help='Filter by country name')
 @db_uri_option
-def search_command(query, limit, country, db_uri):
+@log_level_option
+def search_command(query, limit, country, db_uri, log_level):
     """Search for cities by name with optional country filter."""
     try:
         with CityData(db_uri) as city_data:
@@ -57,7 +66,8 @@ def search_command(query, limit, country, db_uri):
 @cli.command('city')
 @click.argument('city_id', type=int)
 @db_uri_option
-def city_command(city_id, db_uri):
+@log_level_option
+def city_command(city_id, db_uri, log_level):
     """Get a city by its ID."""
     try:
         with CityData(db_uri) as city_data:
@@ -78,7 +88,8 @@ def city_command(city_id, db_uri):
 @click.argument('lng', type=float)
 @click.option('--radius', type=float, default=10, help='Search radius in kilometers (default: 10)')
 @db_uri_option
-def coordinates_command(lat, lng, radius, db_uri):
+@log_level_option
+def coordinates_command(lat, lng, radius, db_uri, log_level):
     """Find cities within a radius of specified coordinates."""
     try:
         with CityData(db_uri) as city_data:
@@ -96,7 +107,8 @@ def coordinates_command(lat, lng, radius, db_uri):
 
 @cli.command('countries')
 @db_uri_option
-def countries_command(db_uri):
+@log_level_option
+def countries_command(db_uri, log_level):
     """List all countries."""
     try:
         with CityData(db_uri) as city_data:
@@ -111,7 +123,8 @@ def countries_command(db_uri):
 @cli.command('states')
 @click.argument('country')
 @db_uri_option
-def states_command(country, db_uri):
+@log_level_option
+def states_command(country, db_uri, log_level):
     """List all states in a country."""
     try:
         with CityData(db_uri) as city_data:
@@ -127,7 +140,8 @@ def states_command(country, db_uri):
 @click.argument('state')
 @click.argument('country')
 @db_uri_option
-def cities_in_state_command(state, country, db_uri):
+@log_level_option
+def cities_in_state_command(state, country, db_uri, log_level):
     """List all cities in a state within a country."""
     try:
         with CityData(db_uri) as city_data:
@@ -146,7 +160,8 @@ def cities_in_state_command(state, country, db_uri):
 @click.option('--csv-path', help='Path to CSV file (optional)')
 @click.option('--batch-size', type=int, default=5000, help='Batch size for import (default: 5000)')
 @db_uri_option
-def import_data_command(csv_path, batch_size, db_uri):
+@log_level_option
+def import_data_command(csv_path, batch_size, db_uri, log_level):
     """Import city data from CSV file."""
     try:
         with CityData(db_uri) as city_data:
@@ -167,7 +182,8 @@ def import_data_command(csv_path, batch_size, db_uri):
 
 @cli.command('table-info')
 @db_uri_option
-def table_info_command(db_uri):
+@log_level_option
+def table_info_command(db_uri, log_level):
     """Get information about the city_data table."""
     try:
         with CityData(db_uri) as city_data:
@@ -184,7 +200,8 @@ def table_info_command(db_uri):
 @click.option('--port', type=int, default=5000, help='The port to bind to')
 @click.option('--debug/--no-debug', default=False, help='Enable debug mode')
 @db_uri_option
-def server_command(host, port, debug, db_uri):
+@log_level_option
+def server_command(host, port, debug, db_uri, log_level):
     """Start the GeoDash API server."""
     try:
         logger.info(f"Starting GeoDash API server at {host}:{port}")

@@ -5,7 +5,6 @@ This module provides the main CityData class that serves as a facade for accessi
 city data through various repositories.
 """
 
-import logging
 import os
 from typing import Dict, List, Any, Optional, Union, Tuple, TypeVar, Iterator, Type, cast, overload
 from functools import lru_cache
@@ -18,13 +17,10 @@ from GeoDash.data.repositories import (
     get_geo_repository, 
     get_region_repository
 )
+from GeoDash.utils.logging import get_logger
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Get a logger for this module
+logger = get_logger(__name__)
 
 T = TypeVar('T', bound='CityData')
 

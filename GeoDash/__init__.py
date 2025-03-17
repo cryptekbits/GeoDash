@@ -21,23 +21,24 @@ Usage Examples:
     
     # Initializing city data
     from GeoDash import initialize
-    initialize()
+    
+    # Setting the log level
+    from GeoDash import set_log_level
+    set_log_level('debug')  # Show more detailed logs
 """
 
 import os
-import logging
 from importlib import import_module
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Union, Tuple
 
+# Import and configure logging early
+from GeoDash.utils.logging import get_logger, set_log_level, configure_logging
+
 __version__ = '1.0.0'
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Get a logger for the main package
+logger = get_logger(__name__)
 
 def initialize() -> bool:
     """
@@ -77,14 +78,10 @@ def initialize() -> bool:
         logger.info("You can manually download city data later using: GeoDash.data.importer.download_city_data()")
         return False
 
-# Import public-facing classes and functions
+# Import key components to expose in the package namespace
+# These imports are done after logging configuration to ensure they use the configured logging
 from GeoDash.data.city_manager import CityData
 from GeoDash.api.server import start_server
 
-# Define what's imported with `from GeoDash import *`
-__all__ = [
-    'CityData',      # Facade for accessing and managing city data
-    'start_server',  # Function to start the GeoDash API server
-    'initialize',    # Function to check and download city data
-    '__version__'    # Package version
-] 
+# Export key functions for public API
+__all__ = ['CityData', 'start_server', 'initialize', 'set_log_level'] 
