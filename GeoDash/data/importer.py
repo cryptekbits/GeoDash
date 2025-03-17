@@ -15,6 +15,7 @@ from typing import Dict, List, Any, Optional, Tuple, Union, Set, Iterator, TextI
 from pathlib import Path
 
 from GeoDash.data.database import DatabaseManager
+from GeoDash.exceptions import DataImportError, DataNotFoundError, ValidationError
 
 # Configure logging
 logging.basicConfig(
@@ -75,7 +76,7 @@ def download_city_data(force: bool = False, url: Optional[str] = None) -> str:
         Path to the downloaded file
         
     Raises:
-        Exception: If the download fails
+        DataImportError: If the download fails
     """
     # Get the data directory
     data_dir = get_data_directory()
@@ -100,7 +101,7 @@ def download_city_data(force: bool = False, url: Optional[str] = None) -> str:
         return csv_path
     except Exception as e:
         logger.error(f"Failed to download cities.csv: {e}")
-        raise Exception(f"Failed to download cities.csv: {e}")
+        raise DataImportError(f"Failed to download cities.csv: {e}")
 
 class CityDataImporter:
     """
@@ -133,25 +134,25 @@ class CityDataImporter:
             Number of records imported.
             
         Raises:
-            FileNotFoundError: If the CSV file is not found and cannot be downloaded.
+            DataNotFoundError: If the CSV file is not found and cannot be downloaded.
         """
         # Find the CSV file if not provided
         if csv_path is None:
             try:
                 csv_path = self._find_csv_file()
                 logger.info(f"Found local city data file at {csv_path}")
-            except FileNotFoundError:
+            except DataNotFoundError:
                 if download_if_missing:
                     logger.info("Local city data file not found. Attempting to download...")
                     try:
                         csv_path = download_city_data()
                     except Exception as e:
-                        raise FileNotFoundError(f"City data CSV file not found and download failed: {str(e)}")
+                        raise DataNotFoundError(f"City data CSV file not found and download failed: {str(e)}")
                 else:
-                    raise FileNotFoundError("City data CSV file not found and download_if_missing is False")
+                    raise DataNotFoundError("City data CSV file not found and download_if_missing is False")
         
         if not os.path.exists(csv_path):
-            raise FileNotFoundError(f"City data CSV file not found at {csv_path}")
+            raise DataNotFoundError(f"City data CSV file not found at {csv_path}")
         
         logger.info(f"Importing city data from {csv_path}")
         
@@ -178,7 +179,7 @@ class CityDataImporter:
         required_columns = ['id', 'name', 'country_name', 'latitude', 'longitude']
         missing_columns = [col for col in required_columns if col not in df.columns]
         if missing_columns:
-            raise ValueError(f"CSV file is missing required columns: {', '.join(missing_columns)}")
+            raise ValidationError(f"CSV file is missing required columns: {', '.join(missing_columns)}")
         
         # Remove rows with missing required values
         original_count = len(df)
@@ -209,7 +210,7 @@ class CityDataImporter:
             Path to the CSV file.
             
         Raises:
-            FileNotFoundError: If the CSV file is not found.
+            DataNotFoundError: If the CSV file is not found.
         """
         # Use the central get_data_directory function
         data_dir = get_data_directory()
@@ -233,7 +234,7 @@ class CityDataImporter:
                 logger.info(f"Found city data at: {path}")
                 return path
         
-        raise FileNotFoundError("City data CSV file not found in any standard locations")
+        raise DataNotFoundError("City data CSV file not found in any standard locations")
     
     def _standardize_columns(self, df: pd.DataFrame) -> pd.DataFrame:
         """

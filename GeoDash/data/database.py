@@ -15,6 +15,10 @@ from pathlib import Path
 import time
 from GeoDash.utils import log_error_with_github_info
 import re
+from GeoDash.exceptions import (
+    DatabaseError, ConnectionError, QueryError, 
+    TransactionError, ConfigurationError
+)
 
 # Configure logging
 logging.basicConfig(
@@ -89,7 +93,7 @@ class DatabaseManager:
         elif db_uri.startswith('postgresql:'):
             return 'postgresql'
         else:
-            raise ValueError(f"Unsupported database URI: {db_uri}")
+            raise ConfigurationError(f"Unsupported database URI: {db_uri}")
     
     def _check_connection(self):
         """
@@ -119,7 +123,7 @@ class DatabaseManager:
                     self.connection.isolation_level = old_isolation_level
                 else:
                     # Connection is closed, need to reconnect
-                    raise Exception("Connection is closed")
+                    raise ConnectionError("Connection is closed")
             
             # Update last connection time
             self.last_connection_time = current_time
@@ -188,7 +192,7 @@ class DatabaseManager:
             match = re.match(r'postgresql://(?:(\w+)(?::([^@]+))?@)?([^:/]+)(?::(\d+))?/(\w+)', self.db_uri)
             
             if not match:
-                raise ValueError(f"Invalid PostgreSQL URI: {self.db_uri}")
+                raise ConfigurationError(f"Invalid PostgreSQL URI: {self.db_uri}")
                 
             user, password, host, port, dbname = match.groups()
             
@@ -209,7 +213,7 @@ class DatabaseManager:
             return conn
             
         else:
-            raise ValueError(f"Unsupported database type: {self.db_type}")
+            raise ConfigurationError(f"Unsupported database type: {self.db_type}")
     
     def cursor(self) -> Union['DatabaseCursor', 'PersistentCursor']:
         """
@@ -222,7 +226,7 @@ class DatabaseManager:
             Database cursor context manager
         
         Raises:
-            Exception: If there's an error getting a connection or cursor
+            ConnectionError: If there's an error getting a connection or cursor
         """
         with self._connection_lock:
             if self.persistent:
@@ -242,7 +246,7 @@ class DatabaseManager:
                         return PersistentCursor(self.connection.cursor(), self.connection)
                     except Exception as reconnect_error:
                         logger.error(f"Failed to reconnect for cursor: {str(reconnect_error)}")
-                        raise
+                        raise ConnectionError(f"Failed to get database cursor: {str(reconnect_error)}")
             
             # For non-persistent connections, use the DatabaseCursor context manager
             return DatabaseCursor(self)
@@ -289,6 +293,9 @@ class DatabaseManager:
         Args:
             table_name: Name of the table to create
             schema: SQL schema definition for the table
+            
+        Raises:
+            DatabaseError: If there's an error creating the table
         """
         with self.cursor() as cursor:
             try:
@@ -296,7 +303,7 @@ class DatabaseManager:
                 logger.info(f"Created table: {table_name}")
             except Exception as e:
                 logger.error(f"Error creating table {table_name}: {str(e)}")
-                raise
+                raise DatabaseError(f"Error creating table {table_name}: {str(e)}") from e
     
     def create_index(self, index_name: str, table_name: str, columns: List[str], unique: bool = False) -> None:
         """
@@ -307,6 +314,9 @@ class DatabaseManager:
             table_name: Name of the table to create the index on
             columns: Columns to include in the index
             unique: Whether the index should enforce uniqueness
+            
+        Raises:
+            DatabaseError: If there's an error creating the index
         """
         unique_str = "UNIQUE" if unique else ""
         columns_str = ", ".join(columns)
@@ -317,7 +327,7 @@ class DatabaseManager:
                 logger.info(f"Created index: {index_name} on {table_name}({columns_str})")
             except Exception as e:
                 logger.error(f"Error creating index {index_name}: {str(e)}")
-                raise
+                raise DatabaseError(f"Error creating index {index_name}: {str(e)}") from e
     
     def execute(self, query: str, params: Tuple = ()) -> List[Tuple[Any, ...]]:
         """
@@ -329,6 +339,9 @@ class DatabaseManager:
             
         Returns:
             Query results
+            
+        Raises:
+            QueryError: If there's an error executing the query
         """
         with self.cursor() as cursor:
             try:
@@ -336,7 +349,7 @@ class DatabaseManager:
                 return cursor.fetchall()
             except Exception as e:
                 logger.error(f"Error executing query: {str(e)}")
-                raise
+                raise QueryError(f"Error executing query: {str(e)}") from e
     
     def execute_many(self, query: str, params_list: List[Tuple]) -> None:
         """
@@ -345,13 +358,16 @@ class DatabaseManager:
         Args:
             query: SQL query to execute
             params_list: List of query parameter tuples
+            
+        Raises:
+            QueryError: If there's an error executing the batch query
         """
         with self.cursor() as cursor:
             try:
                 cursor.executemany(query, params_list)
             except Exception as e:
                 logger.error(f"Error executing batch query: {str(e)}")
-                raise
+                raise QueryError(f"Error executing batch query: {str(e)}") from e
     
     def has_rtree_support(self) -> bool:
         """
@@ -399,7 +415,7 @@ class DatabaseCursor:
             Database cursor
             
         Raises:
-            Exception: If there's an error creating the cursor
+            ConnectionError: If there's an error creating the cursor
         """
         try:
             self.connection = self.db_manager._get_connection()
@@ -413,7 +429,7 @@ class DatabaseCursor:
                 except:
                     pass
             logger.error(f"Error creating cursor: {str(e)}")
-            raise
+            raise ConnectionError(f"Failed to create database cursor: {str(e)}")
         
     def __exit__(self, exc_type: Optional[Type[BaseException]], 
                  exc_val: Optional[BaseException], 
@@ -436,7 +452,9 @@ class DatabaseCursor:
                 if self.connection:
                     self.connection.rollback()
         except Exception as e:
-            logger.error(f"Error committing/rolling back transaction: {str(e)}")
+            error_msg = f"Error committing/rolling back transaction: {str(e)}"
+            logger.error(error_msg)
+            raise TransactionError(error_msg) from e
         finally:
             # Always close cursor and connection in finally block
             try:
@@ -498,7 +516,9 @@ class PersistentCursor:
                 # An exception occurred, rollback the transaction
                 self.connection.rollback()
         except Exception as e:
-            logger.error(f"Error committing/rolling back transaction: {str(e)}")
+            error_msg = f"Error committing/rolling back transaction: {str(e)}"
+            logger.error(error_msg)
+            raise TransactionError(error_msg) from e
         finally:
             # Always close the cursor in finally block
             try:
