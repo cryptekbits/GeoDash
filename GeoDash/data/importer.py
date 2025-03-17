@@ -11,7 +11,7 @@ import time
 import pandas as pd
 import urllib.request
 import sys
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple, Union, Set, Iterator, TextIO
 from pathlib import Path
 
 from GeoDash.data.database import DatabaseManager
@@ -63,22 +63,19 @@ def get_data_directory() -> str:
     os.makedirs(package_data_dir, exist_ok=True)
     return package_data_dir
 
-def download_city_data(force: bool = False) -> str:
+def download_city_data(force: bool = False, url: Optional[str] = None) -> str:
     """
-    Look for local cities.csv file first, and download only if not found.
-    
-    This function will:
-    1. Check multiple standard locations for an existing cities.csv file
-    2. Only download from the remote source if no local file is found or if force=True
+    Download city data from the internet and save it to the data directory.
     
     Args:
-        force: If True, download even if the file already exists.
+        force: If True, force download even if the file already exists
+        url: URL to download from. If None, uses a default URL.
         
     Returns:
-        Path to the local CSV file (either pre-existing or newly downloaded).
+        Path to the downloaded file
         
     Raises:
-        Exception: If download is needed but fails.
+        Exception: If the download fails
     """
     # Get the data directory
     data_dir = get_data_directory()
@@ -93,11 +90,12 @@ def download_city_data(force: bool = False) -> str:
         return csv_path
     
     # Download the file only if it doesn't exist or force=True
-    csv_url = "https://raw.githubusercontent.com/dr5hn/countries-states-cities-database/refs/heads/master/csv/cities.csv"
+    if url is None:
+        url = "https://raw.githubusercontent.com/dr5hn/countries-states-cities-database/refs/heads/master/csv/cities.csv"
     
     try:
-        logger.info(f"Downloading cities.csv from {csv_url} to {csv_path}...")
-        urllib.request.urlretrieve(csv_url, csv_path)
+        logger.info(f"Downloading cities.csv from {url} to {csv_path}...")
+        urllib.request.urlretrieve(url, csv_path)
         logger.info("Download complete!")
         return csv_path
     except Exception as e:
@@ -112,7 +110,7 @@ class CityDataImporter:
     into the GeoDash database.
     """
     
-    def __init__(self, db_manager: DatabaseManager):
+    def __init__(self, db_manager: DatabaseManager) -> None:
         """
         Initialize the CityDataImporter with a database manager.
         

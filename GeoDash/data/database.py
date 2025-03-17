@@ -9,7 +9,7 @@ import os
 import sqlite3
 import logging
 import threading
-from typing import Optional, Any, Dict, Tuple, List
+from typing import Optional, Any, Dict, Tuple, List, Union, Iterator, TypeVar, Type, cast, ContextManager, Generator, Callable
 from contextlib import contextmanager
 from pathlib import Path
 import time
@@ -23,6 +23,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+T = TypeVar('T', bound='DatabaseManager')
+
 class DatabaseManager:
     """
     Database manager for the GeoDash package.
@@ -31,7 +33,7 @@ class DatabaseManager:
     for the GeoDash package.
     """
     
-    def __init__(self, db_uri: str, persistent: bool = False, connection_timeout: int = 30):
+    def __init__(self, db_uri: str, persistent: bool = False, connection_timeout: int = 30) -> None:
         """
         Initialize the database manager with a database URI.
         
@@ -56,15 +58,17 @@ class DatabaseManager:
             self.last_connection_time = time.time()
             logger.info(f"Established persistent {self.db_type} connection")
     
-    def __del__(self):
+    def __del__(self) -> None:
         """Destructor to ensure connection is closed when object is garbage collected."""
         self.close()
     
-    def __enter__(self):
+    def __enter__(self: T) -> T:
         """Enter the context manager, return self for use in 'with' statements."""
         return self
     
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, exc_type: Optional[Type[BaseException]], 
+                exc_val: Optional[BaseException], 
+                exc_tb: Optional[Any]) -> None:
         """Exit the context manager, close the connection if not persistent."""
         if not self.persistent:
             self.close()
@@ -207,12 +211,18 @@ class DatabaseManager:
         else:
             raise ValueError(f"Unsupported database type: {self.db_type}")
     
-    def cursor(self):
+    def cursor(self) -> Union['DatabaseCursor', 'PersistentCursor']:
         """
-        Get a database cursor as a context manager.
+        Get a cursor for executing database operations.
+        
+        This method returns a cursor as a context manager, which will be
+        automatically closed when exiting the context.
         
         Returns:
             Database cursor context manager
+        
+        Raises:
+            Exception: If there's an error getting a connection or cursor
         """
         with self._connection_lock:
             if self.persistent:
@@ -237,7 +247,7 @@ class DatabaseManager:
             # For non-persistent connections, use the DatabaseCursor context manager
             return DatabaseCursor(self)
     
-    def close(self):
+    def close(self) -> None:
         """Close the database connection if it exists."""
         with self._connection_lock:
             if self.connection:
@@ -272,7 +282,7 @@ class DatabaseManager:
                 logger.error(f"Error checking if table exists: {str(e)}")
                 return False
     
-    def create_table(self, table_name: str, schema: str):
+    def create_table(self, table_name: str, schema: str) -> None:
         """
         Create a table in the database.
         
@@ -288,7 +298,7 @@ class DatabaseManager:
                 logger.error(f"Error creating table {table_name}: {str(e)}")
                 raise
     
-    def create_index(self, index_name: str, table_name: str, columns: List[str], unique: bool = False):
+    def create_index(self, index_name: str, table_name: str, columns: List[str], unique: bool = False) -> None:
         """
         Create an index on a table.
         
@@ -309,7 +319,7 @@ class DatabaseManager:
                 logger.error(f"Error creating index {index_name}: {str(e)}")
                 raise
     
-    def execute(self, query: str, params: Tuple = ()):
+    def execute(self, query: str, params: Tuple = ()) -> List[Tuple[Any, ...]]:
         """
         Execute a SQL query.
         
@@ -328,7 +338,7 @@ class DatabaseManager:
                 logger.error(f"Error executing query: {str(e)}")
                 raise
     
-    def execute_many(self, query: str, params_list: List[Tuple]):
+    def execute_many(self, query: str, params_list: List[Tuple]) -> None:
         """
         Execute a SQL query with multiple parameter sets.
         
@@ -381,8 +391,16 @@ class DatabaseCursor:
         self.connection = None
         self.cursor = None
         
-    def __enter__(self):
-        """Enter the context manager and get a cursor."""
+    def __enter__(self) -> Any:
+        """
+        Enter the context manager and get a cursor.
+        
+        Returns:
+            Database cursor
+            
+        Raises:
+            Exception: If there's an error creating the cursor
+        """
         try:
             self.connection = self.db_manager._get_connection()
             self.cursor = self.connection.cursor()
@@ -397,8 +415,17 @@ class DatabaseCursor:
             logger.error(f"Error creating cursor: {str(e)}")
             raise
         
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Exit the context manager and clean up resources."""
+    def __exit__(self, exc_type: Optional[Type[BaseException]], 
+                 exc_val: Optional[BaseException], 
+                 exc_tb: Optional[Any]) -> None:
+        """
+        Exit the context manager and clean up resources.
+        
+        Args:
+            exc_type: Exception type if an exception was raised
+            exc_val: Exception value if an exception was raised
+            exc_tb: Traceback if an exception was raised
+        """
         try:
             if exc_type is None:
                 # No exception occurred, commit the transaction
@@ -432,7 +459,7 @@ class PersistentCursor:
     but not closing the connection when the operation is completed.
     """
     
-    def __init__(self, cursor, connection):
+    def __init__(self, cursor: Any, connection: Any):
         """
         Initialize the persistent cursor context manager.
         
@@ -443,12 +470,26 @@ class PersistentCursor:
         self.cursor = cursor
         self.connection = connection
         
-    def __enter__(self):
-        """Enter the context manager and return the cursor."""
+    def __enter__(self) -> Any:
+        """
+        Enter the context manager and return the cursor.
+        
+        Returns:
+            Database cursor
+        """
         return self.cursor
         
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Exit the context manager and commit/rollback the transaction."""
+    def __exit__(self, exc_type: Optional[Type[BaseException]], 
+                 exc_val: Optional[BaseException], 
+                 exc_tb: Optional[Any]) -> None:
+        """
+        Exit the context manager and commit/rollback the transaction.
+        
+        Args:
+            exc_type: Exception type if an exception was raised
+            exc_val: Exception value if an exception was raised
+            exc_tb: Traceback if an exception was raised
+        """
         try:
             if exc_type is None:
                 # No exception occurred, commit the transaction

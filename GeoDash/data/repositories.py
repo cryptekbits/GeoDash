@@ -7,7 +7,7 @@ in the GeoDash database.
 
 import logging
 import math
-from typing import Dict, List, Any, Tuple, Optional
+from typing import Dict, List, Any, Tuple, Optional, Union, ClassVar, Type, TypeVar, Set
 from functools import lru_cache
 import time
 import asyncio
@@ -381,10 +381,10 @@ class BaseRepository:
     """
     
     # Shared memory management for all repositories
-    _shared_memory_handles = {}
+    _shared_memory_handles: ClassVar[Dict[str, Any]] = {}
     
     @classmethod
-    def close_shared_memory(cls, name):
+    def close_shared_memory(cls, name: str) -> bool:
         """Close a shared memory block safely."""
         try:
             if name in cls._shared_memory_handles:
@@ -398,13 +398,13 @@ class BaseRepository:
         return False
     
     @classmethod
-    def register_shared_memory(cls, name, shm):
+    def register_shared_memory(cls, name: str, shm: Any) -> None:
         """Register a shared memory handle for cleanup."""
         cls._shared_memory_handles[name] = shm
         logger.debug(f"Registered shared memory handle: {name}")
     
     @classmethod
-    def cleanup_shared_memory(cls):
+    def cleanup_shared_memory(cls) -> None:
         """Cleanup shared memory blocks, considering reference counting."""
         logger.info("Beginning shared memory cleanup process")
         
@@ -466,7 +466,7 @@ class BaseRepository:
         except Exception as e:
             logger.error(f"Error in shared memory cleanup: {str(e)}")
     
-    def __init__(self, db_manager: DatabaseManager):
+    def __init__(self, db_manager: DatabaseManager) -> None:
         """
         Initialize the repository with a database manager.
         
@@ -476,7 +476,7 @@ class BaseRepository:
         self.db_manager = db_manager
         self.table_name = 'city_data'
     
-    def __del__(self):
+    def __del__(self) -> None:
         """Destructor to ensure shared memory is cleaned up when the repository is garbage collected."""
         try:
             # Attempt to clean up shared memory resources
@@ -517,7 +517,7 @@ class CityRepository(BaseRepository):
     Repository for city lookup by ID and search operations.
     """
     
-    def __init__(self, db_manager: DatabaseManager, initialize: bool = True):
+    def __init__(self, db_manager: DatabaseManager, initialize: bool = True) -> None:
         """
         Initialize the repository with a database manager and load city data into memory.
         
@@ -528,10 +528,10 @@ class CityRepository(BaseRepository):
         super().__init__(db_manager)
         
         # City name lookup structures
-        self.city_index = {}  # Map of city_id to city data
-        self.city_names = {}  # Map of lowercase city name to list of city IDs
-        self.ascii_names = {} # Map of lowercase ASCII name to list of city IDs
-        self.country_cities = {} # Map of country to list of city IDs
+        self.city_index: Dict[int, Dict[str, Any]] = {}  # Map of city_id to city data
+        self.city_names: Dict[str, List[int]] = {}  # Map of lowercase city name to list of city IDs
+        self.ascii_names: Dict[str, List[int]] = {} # Map of lowercase ASCII name to list of city IDs
+        self.country_cities: Dict[str, List[int]] = {} # Map of country to list of city IDs
         
         # Trie data structures for efficient prefix matching
         if USING_TRIE:
@@ -778,20 +778,22 @@ class CityRepository(BaseRepository):
         fuzzy_threshold: int = 70  # Increased from 70 to 85 for better performance
     ) -> List[Dict[str, Any]]:
         """
-        Search for cities by name with autocomplete, fuzzy matching, and location-aware support.
+        Search for cities by name with optional location-aware prioritization.
+        
+        This method searches for cities by name, optionally filtered by country and
+        prioritized by proximity to the user's location if provided.
         
         Args:
-            query: The search query (city name prefix)
-            limit: Maximum number of results to return (default: 10)
-            country: Optional country filter (restricts results to this country)
-            user_lat: User's latitude for location-aware prioritization
-            user_lng: User's longitude for location-aware prioritization
-            user_country: User's country for location-aware prioritization
-            fuzzy_threshold: Minimum similarity score for fuzzy matching (0-100)
+            query: City name to search for (can be partial)
+            limit: Maximum number of results to return
+            country: Optional country to filter results by
+            user_lat: User's latitude for location-based prioritization
+            user_lng: User's longitude for location-based prioritization
+            user_country: User's country for country-biased results
+            fuzzy_threshold: Threshold for fuzzy matching (0-100)
             
         Returns:
-            List of matching cities as dictionaries with city details,
-            prioritized by proximity to user's location when provided
+            List of matching cities, ordered by relevance and optionally proximity
         """
         if not query:
             return []

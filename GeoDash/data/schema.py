@@ -5,7 +5,7 @@ This module provides schema definitions and management for the GeoDash database.
 """
 
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional, Tuple, Set, Union, cast
 from GeoDash.data.database import DatabaseManager
 
 # Configure logging
@@ -23,7 +23,7 @@ class SchemaManager:
     for the GeoDash database.
     """
     
-    def __init__(self, db_manager: DatabaseManager):
+    def __init__(self, db_manager: DatabaseManager) -> None:
         """
         Initialize the SchemaManager with a database manager.
         
@@ -33,7 +33,7 @@ class SchemaManager:
         self.db_manager = db_manager
         self.city_table_name = 'city_data'
     
-    def ensure_schema_exists(self):
+    def ensure_schema_exists(self) -> None:
         """
         Ensure that the database schema exists, creating it if necessary.
         """
@@ -60,7 +60,7 @@ class SchemaManager:
             logger.info(f"Table {self.city_table_name} already exists.")
             self._ensure_rtree_populated()
     
-    def _ensure_rtree_populated(self):
+    def _ensure_rtree_populated(self) -> None:
         """
         Ensure that the R*Tree index contains all city records.
         This is especially important if the R*Tree index was added after data was loaded.
@@ -158,7 +158,7 @@ class SchemaManager:
                 import traceback
                 logger.debug(traceback.format_exc())
     
-    def create_schema(self):
+    def create_schema(self) -> None:
         """
         Create the database schema, including tables and indexes.
         """
@@ -167,7 +167,7 @@ class SchemaManager:
         self._create_search_optimizations()
         logger.info("Schema creation complete.")
     
-    def _create_city_table(self):
+    def _create_city_table(self) -> None:
         """
         Create the city_data table in the database.
         """
@@ -211,7 +211,7 @@ class SchemaManager:
         self.db_manager.create_table(self.city_table_name, schema)
         logger.info("Created city_data table")
     
-    def _create_city_indexes(self):
+    def _create_city_indexes(self) -> None:
         """
         Create indexes on the city_data table for better query performance.
         """
@@ -305,7 +305,7 @@ class SchemaManager:
             except Exception as e:
                 logger.warning(f"Could not create PostGIS spatial index: {str(e)}")
                 
-    def _create_search_optimizations(self):
+    def _create_search_optimizations(self) -> None:
         """
         Create full-text search optimizations for each database type.
         For SQLite: Create an FTS5 virtual table

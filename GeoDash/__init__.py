@@ -28,6 +28,7 @@ import os
 import logging
 from importlib import import_module
 from pathlib import Path
+from typing import List, Optional, Dict, Any, Union, Tuple
 
 __version__ = '1.0.0'
 
@@ -38,7 +39,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def initialize():
+def initialize() -> bool:
     """
     Check if city data exists and download it if not found.
     
@@ -51,7 +52,7 @@ def initialize():
               False if download failed
     """
     # Try to find cities.csv in standard locations
-    standard_locations = [
+    standard_locations: List[str] = [
         os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'cities.csv'),
         os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'cities.csv'),
     ]

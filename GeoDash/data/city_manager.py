@@ -7,7 +7,7 @@ city data through various repositories.
 
 import logging
 import os
-from typing import Dict, List, Any, Optional, Union
+from typing import Dict, List, Any, Optional, Union, Tuple, TypeVar, Iterator, Type, cast, overload
 from functools import lru_cache
 
 from GeoDash.data.database import DatabaseManager
@@ -26,6 +26,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+T = TypeVar('T', bound='CityData')
+
 class CityData:
     """
     A facade for accessing and managing city data.
@@ -34,7 +36,7 @@ class CityData:
     a unified interface for city data operations.
     """
     
-    def __init__(self, db_uri: str = None, persistent: bool = False):
+    def __init__(self, db_uri: Optional[str] = None, persistent: bool = False) -> None:
         """
         Initialize the CityData manager.
         
@@ -86,7 +88,7 @@ class CityData:
         # Keep track of persistence
         self.persistent = persistent
     
-    def import_city_data(self, csv_path: str = None, batch_size: int = 5000) -> bool:
+    def import_city_data(self, csv_path: Optional[str] = None, batch_size: int = 5000) -> bool:
         """
         Import city data from a CSV file.
         
@@ -132,10 +134,10 @@ class CityData:
         self, 
         query: str, 
         limit: int = 10, 
-        country: str = None, 
-        user_lat: float = None, 
-        user_lng: float = None, 
-        user_country: str = None
+        country: Optional[str] = None, 
+        user_lat: Optional[float] = None, 
+        user_lng: Optional[float] = None, 
+        user_country: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
         Search for cities by name with optional location-aware prioritization.
@@ -239,7 +241,7 @@ class CityData:
         """
         return self.schema_manager.get_table_info()
     
-    def close(self):
+    def close(self) -> None:
         """
         Close the database connection.
         
@@ -253,7 +255,7 @@ class CityData:
                 logger.debug("Closed non-persistent database connection")
             # Persistent connections are kept open until the process exits
     
-    def __enter__(self):
+    def __enter__(self: T) -> T:
         """
         Enter context manager.
         
@@ -262,7 +264,9 @@ class CityData:
         """
         return self
         
-    def __exit__(self, exc_type, exc_value, traceback):
+    def __exit__(self, exc_type: Optional[Type[BaseException]], 
+                exc_value: Optional[BaseException], 
+                traceback: Optional[Any]) -> None:
         """
         Exit context manager.
         
