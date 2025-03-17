@@ -13,7 +13,9 @@ import json
 from pathlib import Path
 
 # Add the project root to the Python path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Since this file is now in GeoDash/deployment, adjust the path to point to the project root
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, project_root)
 
 # Configure logging
 logger = logging.getLogger("geodash.gunicorn")
@@ -84,7 +86,7 @@ def on_starting(server):
                 start_time = time.time()
                 
                 # Create database connections
-                db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'GeoDash', 'data', 'cities.db')
+                db_path = os.path.join(project_root, 'GeoDash', 'data', 'cities.db')
                 db_uri = f"sqlite:///{db_path}"
                 
                 logger.info(f"Master process: Initializing database at {db_uri}")
