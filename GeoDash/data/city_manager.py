@@ -6,7 +6,7 @@ city data through various repositories.
 """
 
 import os
-from typing import Dict, List, Any, Optional, Union, Tuple, TypeVar, Iterator, Type, cast, overload
+from typing import Dict, List, Any, Optional, Union, Tuple, TypeVar, Iterator, Type, cast, overload, Set, Callable, Protocol
 from functools import lru_cache
 
 from GeoDash.data.database import DatabaseManager

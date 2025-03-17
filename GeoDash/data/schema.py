@@ -432,37 +432,71 @@ class SchemaManager:
         Get information about the city_data table.
         
         Returns:
-            Dictionary with table information
+            Dictionary with table information including columns and row count
         """
-        if not self.db_manager.table_exists(self.city_table_name):
-            return {'exists': False}
+        info = {
+            'table_name': self.city_table_name,
+            'columns': [],
+            'row_count': 0,
+            'indexes': [],
+            'database_type': self.db_manager.db_type
+        }
         
+        # Get column information
         with self.db_manager.cursor() as cursor:
             if self.db_manager.db_type == 'sqlite':
+                # Get columns for SQLite
                 cursor.execute(f"PRAGMA table_info({self.city_table_name})")
-                columns = [{'name': row[1], 'type': row[2]} for row in cursor.fetchall()]
+                for row in cursor.fetchall():
+                    col_info = {
+                        'name': row[1],
+                        'type': row[2],
+                        'notnull': bool(row[3]),
+                        'pk': bool(row[5])
+                    }
+                    info['columns'].append(col_info)
                 
+                # Get row count for SQLite
                 cursor.execute(f"SELECT COUNT(*) FROM {self.city_table_name}")
-                row_count = cursor.fetchone()[0]
+                info['row_count'] = cursor.fetchone()[0]
                 
-                return {
-                    'exists': True,
-                    'columns': columns,
-                    'row_count': row_count
-                }
-            else:  # PostgreSQL
+                # Get indexes for SQLite
+                cursor.execute(f"SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='{self.city_table_name}'")
+                for row in cursor.fetchall():
+                    info['indexes'].append(row[0])
+                
+            elif self.db_manager.db_type == 'postgresql':
+                # Get columns for PostgreSQL
                 cursor.execute(f"""
-                SELECT column_name, data_type 
-                FROM information_schema.columns 
+                SELECT column_name, data_type, is_nullable, 
+                       CASE WHEN column_name IN (SELECT a.attname
+                                              FROM pg_index i
+                                              JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+                                              WHERE i.indrelid = '{self.city_table_name}'::regclass AND i.indisprimary)
+                            THEN TRUE ELSE FALSE END as is_pk
+                FROM information_schema.columns
                 WHERE table_name = '{self.city_table_name}'
                 """)
-                columns = [{'name': row[0], 'type': row[1]} for row in cursor.fetchall()]
+                for row in cursor.fetchall():
+                    col_info = {
+                        'name': row[0],
+                        'type': row[1],
+                        'notnull': row[2] == 'NO',
+                        'pk': row[3]
+                    }
+                    info['columns'].append(col_info)
                 
+                # Get row count for PostgreSQL
                 cursor.execute(f"SELECT COUNT(*) FROM {self.city_table_name}")
-                row_count = cursor.fetchone()[0]
+                info['row_count'] = cursor.fetchone()[0]
                 
-                return {
-                    'exists': True,
-                    'columns': columns,
-                    'row_count': row_count
-                } 
+                # Get indexes for PostgreSQL
+                cursor.execute(f"""
+                SELECT indexname
+                FROM pg_indexes
+                WHERE tablename = '{self.city_table_name}'
+                """)
+                for row in cursor.fetchall():
+                    info['indexes'].append(row[0])
+        
+        return info 

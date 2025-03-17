@@ -8,7 +8,7 @@ and operations for the GeoDash package. It supports both SQLite and PostgreSQL.
 import os
 import sqlite3
 import threading
-from typing import Optional, Any, Dict, Tuple, List, Union, Iterator, TypeVar, Type, cast, ContextManager, Generator, Callable, Deque
+from typing import Optional, Any, Dict, Tuple, List, Union, Iterator, TypeVar, Type, cast, ContextManager, Generator, Callable, Deque, Protocol, NoReturn, Generic, overload, Literal
 from contextlib import contextmanager
 from pathlib import Path
 import time
@@ -25,6 +25,7 @@ from GeoDash.exceptions import (
 logger = get_logger(__name__)
 
 T = TypeVar('T', bound='DatabaseManager')
+CursorType = TypeVar('CursorType')
 
 class ConnectionPool:
     """

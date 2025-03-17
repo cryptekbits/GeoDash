@@ -4,8 +4,9 @@ CSV cleaning utility for GeoDash data imports.
 import csv
 from pathlib import Path
 from datetime import datetime
+from typing import Tuple, Optional, Dict, Any
 
-def clean_city_data(input_path: str, output_path: str = None, error_path: str = None) -> tuple:
+def clean_city_data(input_path: str, output_path: Optional[str] = None, error_path: Optional[str] = None) -> Tuple[int, int, str]:
     """
     Clean city data CSV by removing entries without country_code,
     while saving the removed entries to an error file.
