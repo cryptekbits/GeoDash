@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 import click
 
-from GeoDash.data import CityData
+from GeoDash.services.city_service import CityService
 from GeoDash.api.server import start_server
 from GeoDash.utils import log_error_with_github_info
 from GeoDash.utils.logging import get_logger, set_log_level
@@ -48,8 +48,8 @@ def cli():
 def search_command(query, limit, country, db_uri, log_level):
     """Search for cities by name with optional country filter."""
     try:
-        with CityData(db_uri) as city_data:
-            results = city_data.search_cities(
+        with CityService(db_uri) as city_service:
+            results = city_service.search_cities(
                 query=query, 
                 limit=limit, 
                 country=country
@@ -70,8 +70,8 @@ def search_command(query, limit, country, db_uri, log_level):
 def city_command(city_id, db_uri, log_level):
     """Get a city by its ID."""
     try:
-        with CityData(db_uri) as city_data:
-            city = city_data.get_city(city_id=city_id)
+        with CityService(db_uri) as city_service:
+            city = city_service.get_city(city_id=city_id)
             
             if city:
                 click.echo(json.dumps(city, indent=2, ensure_ascii=False))
@@ -92,8 +92,8 @@ def city_command(city_id, db_uri, log_level):
 def coordinates_command(lat, lng, radius, db_uri, log_level):
     """Find cities within a radius of specified coordinates."""
     try:
-        with CityData(db_uri) as city_data:
-            cities = city_data.get_cities_by_coordinates(
+        with CityService(db_uri) as city_service:
+            cities = city_service.get_cities_by_coordinates(
                 lat=lat,
                 lng=lng,
                 radius_km=radius
@@ -111,8 +111,8 @@ def coordinates_command(lat, lng, radius, db_uri, log_level):
 def countries_command(db_uri, log_level):
     """List all countries."""
     try:
-        with CityData(db_uri) as city_data:
-            countries = city_data.get_countries()
+        with CityService(db_uri) as city_service:
+            countries = city_service.get_countries()
             
             click.echo(json.dumps(countries, indent=2, ensure_ascii=False))
             return 0
@@ -127,8 +127,8 @@ def countries_command(db_uri, log_level):
 def states_command(country, db_uri, log_level):
     """List all states in a country."""
     try:
-        with CityData(db_uri) as city_data:
-            states = city_data.get_states(country=country)
+        with CityService(db_uri) as city_service:
+            states = city_service.get_states(country=country)
             
             click.echo(json.dumps(states, indent=2, ensure_ascii=False))
             return 0
@@ -144,8 +144,8 @@ def states_command(country, db_uri, log_level):
 def cities_in_state_command(state, country, db_uri, log_level):
     """List all cities in a state within a country."""
     try:
-        with CityData(db_uri) as city_data:
-            cities = city_data.get_cities_in_state(
+        with CityService(db_uri) as city_service:
+            cities = city_service.get_cities_in_state(
                 state=state,
                 country=country
             )
@@ -164,8 +164,8 @@ def cities_in_state_command(state, country, db_uri, log_level):
 def import_data_command(csv_path, batch_size, db_uri, log_level):
     """Import city data from CSV file."""
     try:
-        with CityData(db_uri) as city_data:
-            success = city_data.import_city_data(
+        with CityService(db_uri) as city_service:
+            success = city_service.import_city_data(
                 csv_path=csv_path,
                 batch_size=batch_size
             )
@@ -186,8 +186,8 @@ def import_data_command(csv_path, batch_size, db_uri, log_level):
 def table_info_command(db_uri, log_level):
     """Get information about the city_data table."""
     try:
-        with CityData(db_uri) as city_data:
-            info = city_data.get_table_info()
+        with CityService(db_uri) as city_service:
+            info = city_service.get_table_info()
             
             click.echo(json.dumps(info, indent=2, ensure_ascii=False))
             return 0

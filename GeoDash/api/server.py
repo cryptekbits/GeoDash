@@ -14,9 +14,9 @@ import os
 from flask import Flask, request, jsonify, Response, g, current_app
 import werkzeug.exceptions
 
-from GeoDash.data import CityData
 from GeoDash.data.database import DatabaseManager
 from GeoDash.data.repositories import cleanup_shared_memory
+from GeoDash.services.city_service import CityService
 from GeoDash.utils import log_error_with_github_info
 from GeoDash.utils.logging import get_logger
 
@@ -142,15 +142,15 @@ def create_app(db_uri: Optional[str] = None) -> Flask:
             os.makedirs(data_dir, exist_ok=True)
             db_uri = f"sqlite:///{os.path.join(data_dir, 'cities.db')}"
         
-        # Create a persistent CityData instance that will use pre-initialized data
+        # Create a persistent CityService instance that will use pre-initialized data
         # if available from the master process
-        city_data = CityData(db_uri=db_uri, persistent=True)
+        city_service = CityService(db_uri=db_uri, persistent=True)
         
         # Store in app context for reuse in all requests
-        app.config['CITY_DATA_INSTANCE'] = city_data
+        app.config['CITY_SERVICE_INSTANCE'] = city_service
         
         # Check if data is properly loaded
-        table_info = city_data.get_table_info()
+        table_info = city_service.get_table_info()
         record_count = table_info.get('row_count', 0)
         init_time = time.time() - start_time
         
@@ -241,21 +241,19 @@ def create_app(db_uri: Optional[str] = None) -> Flask:
     
     return app
 
-def get_city_data() -> CityData:
+def get_city_service() -> CityService:
     """
-    Get a CityData instance for the current application.
+    Get a CityService instance for the current application.
     
     Returns:
-        CityData instance initialized with the application's DB URI
+        CityService instance initialized with the application's DB URI
     """
-    # Use the persistent instance created at application startup
-    if 'CITY_DATA_INSTANCE' in current_app.config:
-        return current_app.config['CITY_DATA_INSTANCE']
+    if hasattr(current_app, 'config') and 'CITY_SERVICE_INSTANCE' in current_app.config:
+        return current_app.config['CITY_SERVICE_INSTANCE']
     
-    # Fallback to creating a new instance if not found in app context
-    # This should rarely happen and is just a safety measure
-    logger.warning("Creating new CityData instance - persistent instance not found in app context")
-    return CityData(db_uri=current_app.config.get('DB_URI'))
+    # Fall back to creating a new instance if no shared one exists
+    db_uri = current_app.config.get('DB_URI')
+    return CityService(db_uri=db_uri)
 
 def validate_params(required_params: Optional[List[str]] = None,
                     numeric_params: Optional[List[str]] = None,
@@ -324,24 +322,26 @@ def register_routes(app: Flask) -> None:
     @app.route('/health', methods=['GET'])
     @api_response
     def health() -> Dict[str, Any]:
-        """Return API health information."""
-        with CityData(app.config.get('DB_URI')) as city_data:
-            table_info = city_data.get_table_info()
-            
-            return {
-                'status': 'ok',
-                'database': {
-                    'type': city_data.db_manager.db_type,
-                    'table_exists': True,
-                    'row_count': table_info.get('row_count', 0)
-                }
-            }
+        """
+        Health check endpoint.
+        
+        Returns basic status information about the API service.
+        """
+        return {
+            'status': 'ok',
+            'service': 'GeoDash API',
+            'initialized': app.config.get('INITIALIZED', False),
+            'timestamp': time.time()
+        }
     
     @app.route('/api/status', methods=['GET'])
     @api_response
     def status() -> Dict[str, Any]:
-        """Return API status information."""
-        return health()
+        """API status check with database information."""
+        city_service = get_city_service()
+        table_info = city_service.get_table_info()
+        
+        return {'table_info': table_info}
     
     @app.route('/api/cities/search', methods=['GET'])
     @validate_params(required_params=['query'], max_limit=100)
@@ -411,40 +411,40 @@ def register_routes(app: Flask) -> None:
                 status_code=400
             )
         
-        with CityData(app.config.get('DB_URI')) as city_data:
-            results = city_data.search_cities(
-                query, 
-                limit, 
-                country,
-                user_lat=user_lat,
-                user_lng=user_lng,
-                user_country=user_country
-            )
-            
-            location_info = {}
-            if user_lat is not None and user_lng is not None:
-                location_info['user_coordinates'] = {
-                    'lat': user_lat,
-                    'lng': user_lng
-                }
-            if user_country is not None:
-                location_info['user_country'] = user_country
-            
-            response = {
-                'query': query,
-                'limit': limit,
-                'count': len(results),
-                'results': results
+        city_service = get_city_service()
+        results = city_service.search_cities(
+            query=query, 
+            limit=limit, 
+            country=country,
+            user_lat=user_lat,
+            user_lng=user_lng,
+            user_country=user_country
+        )
+        
+        location_info = {}
+        if user_lat is not None and user_lng is not None:
+            location_info['user_coordinates'] = {
+                'lat': user_lat,
+                'lng': user_lng
             }
-            
-            # Add optional filter and location info
-            if country:
-                response['country_filter'] = country
-            
-            if location_info:
-                response['location_info'] = location_info
-            
-            return response
+        if user_country is not None:
+            location_info['user_country'] = user_country
+        
+        response = {
+            'query': query,
+            'limit': limit,
+            'count': len(results),
+            'results': results
+        }
+        
+        # Add optional filter and location info
+        if country:
+            response['country_filter'] = country
+        
+        if location_info:
+            response['location_info'] = location_info
+        
+        return response
     
     @app.route('/api/search', methods=['GET'])
     @validate_params(required_params=['q'], max_limit=100)
@@ -474,22 +474,22 @@ def register_routes(app: Flask) -> None:
         """
         Get a city by its ID.
         
-        Args:
-            city_id: The ID of the city to retrieve
+        Parameters:
+            city_id: The ID of the city to fetch
         """
-        with CityData(app.config.get('DB_URI')) as city_data:
-            city = city_data.get_city(city_id)
-            
-            if not city:
-                return format_response(
-                    error='Not Found',
-                    message=f"City with ID {city_id} not found",
-                    status_code=404
-                )
-            
+        city_service = get_city_service()
+        city = city_service.get_city(city_id=city_id)
+        
+        if not city:
             return {
-                'city': city
-            }
+                'error': 'Not Found',
+                'message': f"City with ID {city_id} not found"
+            }, 404
+        
+        return {
+            'city_id': city_id,
+            'city': city
+        }
     
     @app.route('/api/cities/<int:city_id>', methods=['GET'])
     @api_response
@@ -512,53 +512,72 @@ def register_routes(app: Flask) -> None:
         Find cities near specified coordinates.
         
         Query parameters:
-            lat: Latitude
-            lng: Longitude
+            lat: Latitude value (-90 to 90)
+            lng: Longitude value (-180 to 180)
             radius_km: Search radius in kilometers (default: 10)
             limit: Maximum number of results (default: 10)
         """
-        lat = float(request.args.get('lat'))
-        lng = float(request.args.get('lng'))
-        radius_km = float(request.args.get('radius_km', 10))
-        limit = min(int(request.args.get('limit', 10)), 50)
-        
-        # Validate coordinates
-        if not -90 <= lat <= 90:
-            return format_response(
-                error='Invalid Parameter',
-                message=f"Latitude must be between -90 and 90, got {lat}",
-                status_code=400
+        try:
+            lat = float(request.args.get('lat'))
+            lng = float(request.args.get('lng'))
+            radius_km = float(request.args.get('radius_km', 10))
+            limit = min(int(request.args.get('limit', 10)), 50)
+            
+            # Validate coordinate ranges
+            if not -90 <= lat <= 90:
+                return format_response(
+                    error='Invalid Parameter',
+                    message=f"lat must be between -90 and 90, got {lat}",
+                    status_code=400
+                )
+                
+            if not -180 <= lng <= 180:
+                return format_response(
+                    error='Invalid Parameter',
+                    message=f"lng must be between -180 and 180, got {lng}",
+                    status_code=400
+                )
+                
+            if radius_km <= 0:
+                return format_response(
+                    error='Invalid Parameter',
+                    message=f"radius_km must be greater than 0, got {radius_km}",
+                    status_code=400
+                )
+            
+            # Cap radius at a reasonable maximum (e.g., 500 km)
+            max_radius = 500
+            if radius_km > max_radius:
+                radius_km = max_radius
+            
+            city_service = get_city_service()
+            cities = city_service.get_cities_by_coordinates(
+                lat=lat,
+                lng=lng,
+                radius_km=radius_km
             )
             
-        if not -180 <= lng <= 180:
-            return format_response(
-                error='Invalid Parameter',
-                message=f"Longitude must be between -180 and 180, got {lng}",
-                status_code=400
-            )
-            
-        if radius_km <= 0:
-            return format_response(
-                error='Invalid Parameter',
-                message=f"Radius must be positive, got {radius_km}",
-                status_code=400
-            )
-        
-        with CityData(app.config.get('DB_URI')) as city_data:
-            cities = city_data.get_cities_by_coordinates(lat, lng, radius_km)
-            
-            # Apply limit
-            cities = cities[:limit]
+            # Limit the results if requested
+            if limit < len(cities):
+                cities = cities[:limit]
             
             return {
-                'coordinates': {
+                'center': {
                     'lat': lat,
                     'lng': lng
                 },
                 'radius_km': radius_km,
+                'limit': limit,
                 'count': len(cities),
-                'results': cities
+                'cities': cities
             }
+            
+        except ValueError as e:
+            return format_response(
+                error='Invalid Parameter',
+                message=str(e),
+                status_code=400
+            )
     
     @app.route('/api/coordinates', methods=['GET'])
     @validate_params(required_params=['lat', 'lng'], 
@@ -572,114 +591,138 @@ def register_routes(app: Flask) -> None:
     @app.route('/api/countries', methods=['GET'])
     @api_response
     def countries() -> Dict[str, Any]:
-        """Get a list of all countries."""
-        with CityData(app.config.get('DB_URI')) as city_data:
-            countries = city_data.get_countries()
-            
-            return {
-                'count': len(countries),
-                'countries': countries
-            }
+        """
+        Get a list of all countries.
+        
+        Returns a sorted list of all country names in the database.
+        """
+        city_service = get_city_service()
+        countries_list = city_service.get_countries()
+        
+        return {
+            'count': len(countries_list),
+            'countries': countries_list
+        }
     
     @app.route('/api/states', methods=['GET'])
     @validate_params(required_params=['country'])
     @api_response
     def states() -> Dict[str, Any]:
         """
-        Get states in a country.
+        Get a list of states in a country.
         
         Query parameters:
             country: Country name
         """
-        country = request.args.get('country')
-        with CityData(app.config.get('DB_URI')) as city_data:
-            states = city_data.get_states(country)
-            
-            return {
-                'country': country,
-                'count': len(states),
-                'states': states
-            }
+        country = request.args.get('country', '')
+        
+        city_service = get_city_service()
+        states_list = city_service.get_states(country=country)
+        
+        return {
+            'country': country,
+            'count': len(states_list),
+            'states': states_list
+        }
     
     @app.route('/api/countries/<country>/states', methods=['GET'])
     @api_response
     def states_original(country: str) -> Dict[str, Any]:
         """
-        Legacy endpoint for getting states in a country.
+        Get a list of states in a country (original URL format).
         
-        Args:
+        Parameters:
             country: Country name
         """
-        with CityData(app.config.get('DB_URI')) as city_data:
-            states = city_data.get_states(country)
-            
-            return {
-                'country': country,
-                'count': len(states),
-                'states': states
-            }
+        city_service = get_city_service()
+        states_list = city_service.get_states(country=country)
+        
+        return {
+            'country': country,
+            'count': len(states_list),
+            'states': states_list
+        }
     
     @app.route('/api/cities/state', methods=['GET'])
     @validate_params(required_params=['state', 'country'], max_limit=100)
     @api_response
     def cities_in_state() -> Dict[str, Any]:
         """
-        Get cities in a state.
+        Get a list of cities in a state within a country.
         
         Query parameters:
             state: State name
             country: Country name
-            limit: Maximum number of results (default: all)
+            limit: Maximum number of results (default: all cities)
         """
-        state = request.args.get('state')
-        country = request.args.get('country')
+        state = request.args.get('state', '')
+        country = request.args.get('country', '')
         limit_str = request.args.get('limit')
         
-        with CityData(app.config.get('DB_URI')) as city_data:
-            cities = city_data.get_cities_in_state(state, country)
-            
-            # Apply limit if specified
-            if limit_str:
+        city_service = get_city_service()
+        cities = city_service.get_cities_in_state(
+            state=state,
+            country=country
+        )
+        
+        # Apply limit if specified
+        if limit_str:
+            try:
                 limit = min(int(limit_str), 100)
-                cities = cities[:limit]
-            
-            return {
-                'country': country,
-                'state': state,
-                'count': len(cities),
-                'cities': cities
-            }
+                if limit < len(cities):
+                    cities = cities[:limit]
+            except ValueError:
+                return format_response(
+                    error='Invalid Parameter',
+                    message=f"limit must be a valid integer, got {limit_str}",
+                    status_code=400
+                )
+        
+        return {
+            'state': state,
+            'country': country,
+            'count': len(cities),
+            'cities': cities
+        }
     
     @app.route('/api/countries/<country>/states/<state>/cities', methods=['GET'])
     @validate_params(max_limit=100)
     @api_response
     def cities_in_state_original(country: str, state: str) -> Dict[str, Any]:
         """
-        Legacy endpoint for getting cities in a state.
+        Get a list of cities in a state (original URL format).
         
-        Args:
+        Parameters:
             country: Country name
             state: State name
             
         Query parameters:
-            limit: Maximum number of results (default: all)
+            limit: Maximum number of results (default: all cities)
         """
         limit_str = request.args.get('limit')
         
-        with CityData(app.config.get('DB_URI')) as city_data:
-            cities = city_data.get_cities_in_state(state, country)
-            
-            # Apply limit if specified
-            if limit_str:
+        city_service = get_city_service()
+        cities = city_service.get_cities_in_state(state=state, country=country)
+        
+        # Apply limit if specified
+        if limit_str:
+            try:
                 limit = min(int(limit_str), 100)
-                cities = cities[:limit]
-            
-            return {
-                'country': country,
-                'state': state,
-                'count': len(cities),
-                'cities': cities
-            }
+                if limit < len(cities):
+                    cities = cities[:limit]
+            except ValueError:
+                return format_response(
+                    error='Invalid Parameter',
+                    message=f"limit must be a valid integer, got {limit_str}",
+                    status_code=400
+                )
+        
+        return {
+            'country': country,
+            'state': state,
+            'count': len(cities),
+            'cities': cities
+        }
 
 def start_server(host: str = '0.0.0.0', port: int = 5000, 
                 db_uri: Optional[str] = None, debug: bool = False) -> None:
@@ -687,13 +730,40 @@ def start_server(host: str = '0.0.0.0', port: int = 5000,
     Start the API server.
     
     Args:
-        host: Host to bind to
-        port: Port to bind to
+        host: Host address to bind to
+        port: Port to listen on
         db_uri: Database URI for city data
-        debug: Enable Flask debug mode
+        debug: Whether to run in debug mode
     """
     app = create_app(db_uri)
-    app.run(host=host, port=port, debug=debug)
+    
+    # Check if the database is ready
+    if app.config.get('INITIALIZED', False):
+        logger.info(f"Starting GeoDash API server on {host}:{port} (debug: {debug})")
+        
+        # Run the Flask application
+        app.run(host=host, port=port, debug=debug)
+    else:
+        # Try to initialize the database if not ready
+        logger.warning("Database not initialized. Attempting to initialize now...")
+        
+        try:
+            city_service = CityService(db_uri)
+            table_info = city_service.get_table_info()
+            
+            if table_info.get('row_count', 0) == 0:
+                logger.info("Database is empty. Importing city data...")
+                city_service.import_city_data()
+                
+            logger.info(f"Database initialized with {table_info.get('row_count', 0)} cities")
+            
+            # Run the Flask application
+            logger.info(f"Starting GeoDash API server on {host}:{port} (debug: {debug})")
+            app.run(host=host, port=port, debug=debug)
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize database: {str(e)}")
+            raise RuntimeError("Could not start server due to database initialization failure") from e
 
 if __name__ == '__main__':
     import argparse
