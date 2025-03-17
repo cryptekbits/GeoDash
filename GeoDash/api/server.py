@@ -7,7 +7,7 @@ through RESTful API endpoints.
 
 import time
 import json
-from typing import Dict, Any, List, Union, Optional, Tuple
+from typing import Dict, Any, List, Union, Optional, Tuple, Callable
 from functools import wraps
 import os
 
@@ -22,6 +22,94 @@ from GeoDash.utils.logging import get_logger
 
 # Get a logger for this module
 logger = get_logger(__name__)
+
+def format_response(data: Any = None, message: str = None, 
+                   error: str = None, status_code: int = 200, 
+                   meta: Dict[str, Any] = None) -> Tuple[Dict[str, Any], int]:
+    """
+    Format API response in a standardized structure.
+    
+    Args:
+        data: Response data payload
+        message: Optional success message
+        error: Optional error message
+        status_code: HTTP status code
+        meta: Optional metadata dictionary
+        
+    Returns:
+        Tuple of (response_dict, status_code)
+    """
+    response = {
+        'success': 200 <= status_code < 300,
+        'status_code': status_code,
+    }
+    
+    if data is not None:
+        response['data'] = data
+    
+    if message:
+        response['message'] = message
+        
+    if error:
+        response['error'] = error
+    
+    if meta:
+        response['meta'] = meta
+    
+    return response, status_code
+
+def api_response(f: Callable) -> Callable:
+    """
+    Decorator to standardize API responses and handle exceptions.
+    
+    This decorator wraps API endpoint functions to ensure all responses
+    follow the same structure and error handling patterns.
+    """
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        try:
+            # Call the original function
+            result = f(*args, **kwargs)
+            
+            # Handle different return types
+            if isinstance(result, tuple) and len(result) == 2:
+                # Assume (data, status_code) format
+                data, status_code = result
+                if isinstance(data, dict) and 'error' in data:
+                    # This is an error response
+                    return format_response(
+                        error=data.get('error'), 
+                        message=data.get('message'),
+                        status_code=status_code
+                    )
+                else:
+                    return format_response(data=data, status_code=status_code)
+            elif isinstance(result, dict):
+                # Assume successful data response
+                return format_response(data=result)
+            else:
+                # Just return whatever it is
+                return format_response(data=result)
+                
+        except werkzeug.exceptions.HTTPException as e:
+            # Handle HTTP exceptions (e.g. BadRequest, NotFound)
+            logger.warning(f"HTTP exception in {f.__name__}: {str(e)}")
+            return format_response(
+                error=e.__class__.__name__,
+                message=str(e.description),
+                status_code=e.code
+            )
+        except Exception as e:
+            # Log and handle unexpected exceptions
+            log_error_with_github_info(e, f"Exception in endpoint {f.__name__}")
+            logger.error(f"Unhandled exception in {f.__name__}: {str(e)}")
+            return format_response(
+                error="Internal Server Error",
+                message="An unexpected error occurred",
+                status_code=500
+            )
+    
+    return decorated_function
 
 def create_app(db_uri: Optional[str] = None) -> Flask:
     """
@@ -115,18 +203,20 @@ def create_app(db_uri: Optional[str] = None) -> Flask:
     @app.errorhandler(werkzeug.exceptions.BadRequest)
     def handle_bad_request(error: werkzeug.exceptions.BadRequest) -> Tuple[Dict[str, Any], int]:
         """Handle bad request errors."""
-        return {
-            'error': 'Bad Request',
-            'message': str(error.description)
-        }, 400
+        return format_response(
+            error='Bad Request',
+            message=str(error.description),
+            status_code=400
+        )
     
     @app.errorhandler(werkzeug.exceptions.NotFound)
     def handle_not_found(error: werkzeug.exceptions.NotFound) -> Tuple[Dict[str, Any], int]:
         """Handle not found errors."""
-        return {
-            'error': 'Not Found',
-            'message': str(error.description)
-        }, 404
+        return format_response(
+            error='Not Found',
+            message=str(error.description),
+            status_code=404
+        )
     
     @app.errorhandler(Exception)
     def handle_exception(error: Exception) -> Tuple[Dict[str, Any], int]:
@@ -134,10 +224,11 @@ def create_app(db_uri: Optional[str] = None) -> Flask:
         # Use the GitHub issue reporting function for unhandled exceptions
         log_error_with_github_info(error, "Unhandled server exception")
         
-        return {
-            'error': 'Internal Server Error',
-            'message': 'An unexpected error occurred'
-        }, 500
+        return format_response(
+            error='Internal Server Error',
+            message='An unexpected error occurred',
+            status_code=500
+        )
     
     # Register API routes
     register_routes(app)
@@ -187,10 +278,11 @@ def validate_params(required_params: Optional[List[str]] = None,
             if required_params:
                 for param in required_params:
                     if param not in params:
-                        return jsonify({
-                            'error': 'Missing Required Parameter',
-                            'message': f"Parameter '{param}' is required"
-                        }), 400
+                        return format_response(
+                            error='Missing Required Parameter',
+                            message=f"Parameter '{param}' is required",
+                            status_code=400
+                        )
             
             # Check for numeric parameters
             if numeric_params:
@@ -199,20 +291,22 @@ def validate_params(required_params: Optional[List[str]] = None,
                         try:
                             float(params[param])
                         except ValueError:
-                            return jsonify({
-                                'error': 'Invalid Parameter',
-                                'message': f"Parameter '{param}' must be numeric"
-                            }), 400
+                            return format_response(
+                                error='Invalid Parameter',
+                                message=f"Parameter '{param}' must be numeric",
+                                status_code=400
+                            )
             
             # Check limit parameter
             if max_limit and 'limit' in params:
                 try:
                     limit = int(params['limit'])
                     if limit > max_limit:
-                        return jsonify({
-                            'error': 'Parameter Limit Exceeded',
-                            'message': f"Parameter 'limit' cannot exceed {max_limit}"
-                        }), 400
+                        return format_response(
+                            error='Parameter Limit Exceeded',
+                            message=f"Parameter 'limit' cannot exceed {max_limit}",
+                            status_code=400
+                        )
                 except ValueError:
                     pass  # Already checked in numeric_params
             
@@ -228,6 +322,7 @@ def register_routes(app: Flask) -> None:
         app: Flask application instance
     """
     @app.route('/health', methods=['GET'])
+    @api_response
     def health() -> Dict[str, Any]:
         """Return API health information."""
         with CityData(app.config.get('DB_URI')) as city_data:
@@ -243,12 +338,14 @@ def register_routes(app: Flask) -> None:
             }
     
     @app.route('/api/status', methods=['GET'])
+    @api_response
     def status() -> Dict[str, Any]:
         """Return API status information."""
         return health()
     
     @app.route('/api/cities/search', methods=['GET'])
     @validate_params(required_params=['query'], max_limit=100)
+    @api_response
     def search() -> Dict[str, Any]:
         """
         Search for cities by name with optional location-aware prioritization.
@@ -262,97 +359,96 @@ def register_routes(app: Flask) -> None:
             user_lng: Optional user longitude for location-aware prioritization
             user_country: Optional user country for location-aware prioritization
         """
-        try:
-            query = request.args.get('query', '')
-            limit = min(int(request.args.get('limit', 10)), 100)
-            
-            # Country filter (restricts results to this country)
-            country = request.args.get('country')
-            
-            # Location-aware parameters (for result prioritization)
-            user_lat = request.args.get('user_lat')
-            user_lng = request.args.get('user_lng')
-            user_country = request.args.get('user_country')
-            
-            # Convert lat/lng to float if provided
-            if user_lat is not None:
-                try:
-                    user_lat = float(user_lat)
-                    if not -90 <= user_lat <= 90:
-                        return jsonify({
-                            'error': 'Invalid Parameter',
-                            'message': f"user_lat must be between -90 and 90, got {user_lat}"
-                        }), 400
-                except ValueError:
-                    return jsonify({
-                        'error': 'Invalid Parameter',
-                        'message': f"user_lat must be a valid number, got {user_lat}"
-                    }), 400
-            
-            if user_lng is not None:
-                try:
-                    user_lng = float(user_lng)
-                    if not -180 <= user_lng <= 180:
-                        return jsonify({
-                            'error': 'Invalid Parameter',
-                            'message': f"user_lng must be between -180 and 180, got {user_lng}"
-                        }), 400
-                except ValueError:
-                    return jsonify({
-                        'error': 'Invalid Parameter',
-                        'message': f"user_lng must be a valid number, got {user_lng}"
-                    }), 400
-            
-            # Both lat and lng must be provided if either is provided
-            if (user_lat is not None and user_lng is None) or (user_lat is None and user_lng is not None):
-                return jsonify({
-                    'error': 'Invalid Parameter',
-                    'message': "Both user_lat and user_lng must be provided for location-aware search"
-                }), 400
-            
-            with CityData(app.config.get('DB_URI')) as city_data:
-                results = city_data.search_cities(
-                    query, 
-                    limit, 
-                    country,
-                    user_lat=user_lat,
-                    user_lng=user_lng,
-                    user_country=user_country
+        query = request.args.get('query', '')
+        limit = min(int(request.args.get('limit', 10)), 100)
+        
+        # Country filter (restricts results to this country)
+        country = request.args.get('country')
+        
+        # Location-aware parameters (for result prioritization)
+        user_lat = request.args.get('user_lat')
+        user_lng = request.args.get('user_lng')
+        user_country = request.args.get('user_country')
+        
+        # Convert lat/lng to float if provided
+        if user_lat is not None:
+            try:
+                user_lat = float(user_lat)
+                if not -90 <= user_lat <= 90:
+                    return format_response(
+                        error='Invalid Parameter',
+                        message=f"user_lat must be between -90 and 90, got {user_lat}",
+                        status_code=400
+                    )
+            except ValueError:
+                return format_response(
+                    error='Invalid Parameter',
+                    message=f"user_lat must be a valid number, got {user_lat}",
+                    status_code=400
                 )
-                
-                location_info = {}
-                if user_lat is not None and user_lng is not None:
-                    location_info['user_coordinates'] = {
-                        'lat': user_lat,
-                        'lng': user_lng
-                    }
-                if user_country is not None:
-                    location_info['user_country'] = user_country
-                
-                response = {
-                    'query': query,
-                    'limit': limit,
-                    'count': len(results),
-                    'results': results
+        
+        if user_lng is not None:
+            try:
+                user_lng = float(user_lng)
+                if not -180 <= user_lng <= 180:
+                    return format_response(
+                        error='Invalid Parameter',
+                        message=f"user_lng must be between -180 and 180, got {user_lng}",
+                        status_code=400
+                    )
+            except ValueError:
+                return format_response(
+                    error='Invalid Parameter',
+                    message=f"user_lng must be a valid number, got {user_lng}",
+                    status_code=400
+                )
+        
+        # Both lat and lng must be provided if either is provided
+        if (user_lat is not None and user_lng is None) or (user_lat is None and user_lng is not None):
+            return format_response(
+                error='Invalid Parameter',
+                message="Both user_lat and user_lng must be provided for location-aware search",
+                status_code=400
+            )
+        
+        with CityData(app.config.get('DB_URI')) as city_data:
+            results = city_data.search_cities(
+                query, 
+                limit, 
+                country,
+                user_lat=user_lat,
+                user_lng=user_lng,
+                user_country=user_country
+            )
+            
+            location_info = {}
+            if user_lat is not None and user_lng is not None:
+                location_info['user_coordinates'] = {
+                    'lat': user_lat,
+                    'lng': user_lng
                 }
-                
-                # Add optional filter and location info
-                if country:
-                    response['country_filter'] = country
-                
-                if location_info:
-                    response['location_info'] = location_info
-                
-                return response
-                
-        except Exception as e:
-            return jsonify({
-                'error': 'Internal Server Error',
-                'message': str(e)
-            }), 500
+            if user_country is not None:
+                location_info['user_country'] = user_country
+            
+            response = {
+                'query': query,
+                'limit': limit,
+                'count': len(results),
+                'results': results
+            }
+            
+            # Add optional filter and location info
+            if country:
+                response['country_filter'] = country
+            
+            if location_info:
+                response['location_info'] = location_info
+            
+            return response
     
     @app.route('/api/search', methods=['GET'])
     @validate_params(required_params=['q'], max_limit=100)
+    @api_response
     def old_search() -> Dict[str, Any]:
         """
         Legacy search endpoint.
@@ -373,6 +469,7 @@ def register_routes(app: Flask) -> None:
         return search()
     
     @app.route('/api/city/<int:city_id>', methods=['GET'])
+    @api_response
     def get_city(city_id: int) -> Dict[str, Any]:
         """
         Get a city by its ID.
@@ -384,16 +481,18 @@ def register_routes(app: Flask) -> None:
             city = city_data.get_city(city_id)
             
             if not city:
-                return jsonify({
-                    'error': 'Not Found',
-                    'message': f"City with ID {city_id} not found"
-                }), 404
+                return format_response(
+                    error='Not Found',
+                    message=f"City with ID {city_id} not found",
+                    status_code=404
+                )
             
             return {
                 'city': city
             }
     
     @app.route('/api/cities/<int:city_id>', methods=['GET'])
+    @api_response
     def get_city_original(city_id: int) -> Dict[str, Any]:
         """
         Legacy endpoint for getting a city by its ID.
@@ -407,6 +506,7 @@ def register_routes(app: Flask) -> None:
     @validate_params(required_params=['lat', 'lng'], 
                       numeric_params=['lat', 'lng', 'radius_km'],
                       max_limit=50)
+    @api_response
     def by_coordinates() -> Dict[str, Any]:
         """
         Find cities near specified coordinates.
@@ -417,62 +517,60 @@ def register_routes(app: Flask) -> None:
             radius_km: Search radius in kilometers (default: 10)
             limit: Maximum number of results (default: 10)
         """
-        try:
-            lat = float(request.args.get('lat'))
-            lng = float(request.args.get('lng'))
-            radius_km = float(request.args.get('radius_km', 10))
-            limit = min(int(request.args.get('limit', 10)), 50)
+        lat = float(request.args.get('lat'))
+        lng = float(request.args.get('lng'))
+        radius_km = float(request.args.get('radius_km', 10))
+        limit = min(int(request.args.get('limit', 10)), 50)
+        
+        # Validate coordinates
+        if not -90 <= lat <= 90:
+            return format_response(
+                error='Invalid Parameter',
+                message=f"Latitude must be between -90 and 90, got {lat}",
+                status_code=400
+            )
             
-            # Validate coordinates
-            if not -90 <= lat <= 90:
-                return jsonify({
-                    'error': 'Invalid Parameter',
-                    'message': f"Latitude must be between -90 and 90, got {lat}"
-                }), 400
-                
-            if not -180 <= lng <= 180:
-                return jsonify({
-                    'error': 'Invalid Parameter',
-                    'message': f"Longitude must be between -180 and 180, got {lng}"
-                }), 400
-                
-            if radius_km <= 0:
-                return jsonify({
-                    'error': 'Invalid Parameter',
-                    'message': f"Radius must be positive, got {radius_km}"
-                }), 400
+        if not -180 <= lng <= 180:
+            return format_response(
+                error='Invalid Parameter',
+                message=f"Longitude must be between -180 and 180, got {lng}",
+                status_code=400
+            )
             
-            with CityData(app.config.get('DB_URI')) as city_data:
-                cities = city_data.get_cities_by_coordinates(lat, lng, radius_km)
-                
-                # Apply limit
-                cities = cities[:limit]
-                
-                return {
-                    'coordinates': {
-                        'lat': lat,
-                        'lng': lng
-                    },
-                    'radius_km': radius_km,
-                    'count': len(cities),
-                    'results': cities
-                }
-                
-        except ValueError as e:
-            return jsonify({
-                'error': 'Invalid Parameter',
-                'message': str(e)
-            }), 400
+        if radius_km <= 0:
+            return format_response(
+                error='Invalid Parameter',
+                message=f"Radius must be positive, got {radius_km}",
+                status_code=400
+            )
+        
+        with CityData(app.config.get('DB_URI')) as city_data:
+            cities = city_data.get_cities_by_coordinates(lat, lng, radius_km)
+            
+            # Apply limit
+            cities = cities[:limit]
+            
+            return {
+                'coordinates': {
+                    'lat': lat,
+                    'lng': lng
+                },
+                'radius_km': radius_km,
+                'count': len(cities),
+                'results': cities
+            }
     
     @app.route('/api/coordinates', methods=['GET'])
     @validate_params(required_params=['lat', 'lng'], 
                       numeric_params=['lat', 'lng', 'radius_km'],
                       max_limit=50)
+    @api_response
     def coordinates_original() -> Dict[str, Any]:
         """Legacy endpoint for finding cities near coordinates."""
         return by_coordinates()
     
     @app.route('/api/countries', methods=['GET'])
+    @api_response
     def countries() -> Dict[str, Any]:
         """Get a list of all countries."""
         with CityData(app.config.get('DB_URI')) as city_data:
@@ -485,6 +583,7 @@ def register_routes(app: Flask) -> None:
     
     @app.route('/api/states', methods=['GET'])
     @validate_params(required_params=['country'])
+    @api_response
     def states() -> Dict[str, Any]:
         """
         Get states in a country.
@@ -503,6 +602,7 @@ def register_routes(app: Flask) -> None:
             }
     
     @app.route('/api/countries/<country>/states', methods=['GET'])
+    @api_response
     def states_original(country: str) -> Dict[str, Any]:
         """
         Legacy endpoint for getting states in a country.
@@ -521,6 +621,7 @@ def register_routes(app: Flask) -> None:
     
     @app.route('/api/cities/state', methods=['GET'])
     @validate_params(required_params=['state', 'country'], max_limit=100)
+    @api_response
     def cities_in_state() -> Dict[str, Any]:
         """
         Get cities in a state.
@@ -551,6 +652,7 @@ def register_routes(app: Flask) -> None:
     
     @app.route('/api/countries/<country>/states/<state>/cities', methods=['GET'])
     @validate_params(max_limit=100)
+    @api_response
     def cities_in_state_original(country: str, state: str) -> Dict[str, Any]:
         """
         Legacy endpoint for getting cities in a state.
