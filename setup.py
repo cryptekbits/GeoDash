@@ -5,6 +5,11 @@ import shutil
 from setuptools.command.install import install
 from setuptools.command.develop import develop
 
+# Import version from GeoDash/__init__.py
+import re
+with open(os.path.join('GeoDash', '__init__.py'), 'r') as f:
+    version = re.search(r"__version__\s*=\s*'(.*)'", f.read()).group(1)
+
 def download_city_data():
     """Download the cities.csv file from a remote source."""
     data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'GeoDash', 'data')
@@ -55,7 +60,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="GeoDash",
-    version="1.0.0",
+    version=version,
     author="GeoDash Team",
     author_email="your.email@example.com",
     description="A Python module for managing city data with fast coordinate queries and autocomplete functionality",
