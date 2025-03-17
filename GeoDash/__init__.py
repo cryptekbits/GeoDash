@@ -18,6 +18,10 @@ Usage Examples:
     # Starting the API server
     from GeoDash import start_server
     start_server(host='localhost', port=8080)
+    
+    # Initializing city data
+    from GeoDash import initialize
+    initialize()
 """
 
 import os
@@ -34,10 +38,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def _check_city_data():
+def initialize():
     """
     Check if city data exists and download it if not found.
-    This function is called when the module is first imported.
+    
+    This function checks standard locations for the city data file and
+    downloads it if not found. It should be called explicitly when
+    the application needs to ensure city data is available.
+    
+    Returns:
+        bool: True if city data was found or successfully downloaded,
+              False if download failed
     """
     # Try to find cities.csv in standard locations
     standard_locations = [
@@ -48,7 +59,7 @@ def _check_city_data():
     for path in standard_locations:
         if os.path.exists(path):
             logger.debug(f"City data found at {path}")
-            return
+            return True
     
     # If we got here, the data file isn't found - try to download it
     try:
@@ -59,16 +70,20 @@ def _check_city_data():
         logger.info("City data not found, attempting to download...")
         download_func()
         logger.info("City data downloaded successfully")
+        return True
     except Exception as e:
         logger.warning(f"Could not download city data: {e}")
         logger.info("You can manually download city data later using: GeoDash.data.importer.download_city_data()")
-
-# Check for city data on import
-_check_city_data()
+        return False
 
 # Import public-facing classes and functions
 from GeoDash.data.city_manager import CityData
 from GeoDash.api.server import start_server
 
 # Define what's imported with `from GeoDash import *`
-__all__ = ['CityData', 'start_server', '__version__'] 
+__all__ = [
+    'CityData',      # Facade for accessing and managing city data
+    'start_server',  # Function to start the GeoDash API server
+    'initialize',    # Function to check and download city data
+    '__version__'    # Package version
+] 
