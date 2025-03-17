@@ -594,4 +594,29 @@ def start_server(host: str = '0.0.0.0', port: int = 5000,
     app.run(host=host, port=port, debug=debug)
 
 if __name__ == '__main__':
-    start_server(debug=True) 
+    import argparse
+    from GeoDash.utils.logging import set_log_level
+    
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Start the GeoDash API server')
+    parser.add_argument('--host', type=str, default='0.0.0.0', help='The host to bind to')
+    parser.add_argument('--port', type=int, default=5000, help='The port to bind to')
+    parser.add_argument('--db-uri', type=str, help='The database URI')
+    parser.add_argument('--debug', action='store_true', help='Enable debug mode')
+    parser.add_argument('--log-level', choices=['debug', 'info', 'warning', 'error', 'critical'], 
+                        default='info', help='Set the logging level')
+    
+    args = parser.parse_args()
+    
+    # Set the log level if specified
+    if args.log_level:
+        set_log_level(args.log_level)
+    
+    logger.info(f"Starting server on {args.host}:{args.port}")
+    
+    start_server(
+        host=args.host,
+        port=args.port,
+        db_uri=args.db_uri,
+        debug=args.debug
+    ) 
