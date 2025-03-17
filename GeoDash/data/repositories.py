@@ -15,6 +15,7 @@ import os
 import threading
 import pickle
 import sys
+import signal
 from multiprocessing import shared_memory, Lock
 import tempfile
 import atexit
@@ -72,6 +73,53 @@ _REGION_REPO_SIZE_BYTES = 5 * 1024 * 1024  # 5MB for region repository
 # Shared memory reference counting
 _shm_reference_counts = {}
 _shm_ref_lock = Lock()
+
+def cleanup_shared_memory():
+    """
+    Public function to manually clean up shared memory.
+    
+    This can be called from application code, for example in a Flask
+    application shutdown function.
+    """
+    logger.info("Manual shared memory cleanup requested")
+    BaseRepository.cleanup_shared_memory()
+
+# Register cleanup function with atexit
+def _cleanup_at_exit():
+    """Cleanup function registered with atexit to ensure shared memory is cleaned up."""
+    logger.info("Performing cleanup on process exit")
+    BaseRepository.cleanup_shared_memory()
+
+atexit.register(_cleanup_at_exit)
+
+# Signal handler for graceful termination
+def _signal_handler(signum, frame):
+    """Signal handler for graceful termination."""
+    sig_name = signal.Signals(signum).name
+    logger.info(f"Received {sig_name} signal, performing cleanup before exit")
+    
+    try:
+        BaseRepository.cleanup_shared_memory()
+        logger.info(f"Cleanup completed for {sig_name} signal")
+    except Exception as e:
+        logger.error(f"Error during signal-triggered cleanup: {str(e)}")
+    
+    # Properly terminate the process without relying on re-raising the signal
+    if signum == signal.SIGINT:
+        logger.info("Exiting process due to SIGINT (Ctrl+C)")
+        # Use os._exit to immediately exit without additional cleanup
+        # that might cause the warnings about already-closed resources
+        os._exit(0)
+
+# Register signal handlers for common termination signals
+for sig in [signal.SIGINT, signal.SIGTERM]:
+    # Get existing handler to ensure we don't overwrite important handlers
+    existing_handler = signal.getsignal(sig)
+    # Only register our handler if the existing one is the default
+    if existing_handler == signal.SIG_DFL or existing_handler == signal.SIG_IGN:
+        signal.signal(sig, _signal_handler)
+    else:
+        logger.info(f"Not registering signal handler for {signal.Signals(sig).name} as one already exists")
 
 def _create_or_get_shared_flag(name):
     """Creates or gets a shared memory flag for repository initialization."""
@@ -148,12 +196,16 @@ def _increment_shm_ref_count(name):
 
 def _decrement_shm_ref_count(name):
     """Decrement reference count for a shared memory block."""
-    with _shm_ref_lock:
-        if name in _shm_reference_counts:
-            _shm_reference_counts[name] -= 1
-            count = _shm_reference_counts[name]
-            logger.debug(f"Decremented reference count for {name} to {count}")
-            return count
+    try:
+        with _shm_ref_lock:
+            if name in _shm_reference_counts:
+                _shm_reference_counts[name] = max(0, _shm_reference_counts[name] - 1)
+                count = _shm_reference_counts[name]
+                logger.debug(f"Decremented reference count for {name} to {count}")
+                return count
+            return 0
+    except Exception as e:
+        logger.warning(f"Error decrementing reference count for {name}: {str(e)}")
         return 0
 
 def _serialize_to_shared_memory(obj, shm):
@@ -388,13 +440,17 @@ class BaseRepository:
         """Close a shared memory block safely."""
         try:
             if name in cls._shared_memory_handles:
-                shm = cls._shared_memory_handles[name]
-                shm.close()
+                try:
+                    shm = cls._shared_memory_handles[name]
+                    shm.close()
+                    logger.debug(f"Closed shared memory: {name}")
+                except Exception as e:
+                    logger.warning(f"Error while closing shared memory {name}: {str(e)}")
+                # Always remove from handles even if close failed
                 del cls._shared_memory_handles[name]
-                logger.debug(f"Closed shared memory: {name}")
                 return True
         except Exception as e:
-            logger.error(f"Error closing shared memory {name}: {str(e)}")
+            logger.error(f"Error accessing shared memory handle {name}: {str(e)}")
         return False
     
     @classmethod
@@ -412,34 +468,30 @@ class BaseRepository:
             # Only the parent process should fully unlink the shared memory
             is_parent = os.getpid() == os.getppid()
             
-            # Process flag shared memory blocks
-            for name in [_CITY_REPO_SHM_NAME, _GEO_REPO_SHM_NAME, _REGION_REPO_SHM_NAME]:
-                try:
-                    # Always close our handle
-                    cls.close_shared_memory(name)
-                    
-                    # Decrement reference count
-                    ref_count = _decrement_shm_ref_count(name)
-                    
-                    # If we're the parent process or the last reference, unlink
-                    if is_parent or ref_count <= 0:
-                        try:
-                            shm = shared_memory.SharedMemory(name=name)
-                            shm.close()
-                            shm.unlink()
-                            logger.info(f"Cleaned up shared memory flag: {name}")
-                        except FileNotFoundError:
-                            logger.debug(f"Shared memory flag already removed: {name}")
-                        except Exception as e:
-                            logger.warning(f"Error unlinking shared memory flag {name}: {str(e)}")
-                    else:
-                        logger.debug(f"Not unlinking {name}, ref count: {ref_count}")
-                except Exception as e:
-                    logger.warning(f"Error during cleanup of shared memory flag {name}: {str(e)}")
+            # List all shared memory blocks to clean up
+            all_shared_memory_names = [
+                _CITY_REPO_SHM_NAME, _GEO_REPO_SHM_NAME, _REGION_REPO_SHM_NAME,
+                _CITY_REPO_DATA_SHM_NAME, _GEO_REPO_DATA_SHM_NAME, _REGION_REPO_DATA_SHM_NAME
+            ]
             
-            # Process data shared memory blocks
-            for name in [_CITY_REPO_DATA_SHM_NAME, _GEO_REPO_DATA_SHM_NAME, _REGION_REPO_DATA_SHM_NAME]:
+            # Process each shared memory block separately
+            for name in list(all_shared_memory_names):
                 try:
+                    # First check if the shared memory object exists
+                    try:
+                        shm = shared_memory.SharedMemory(name=name)
+                        exists = True
+                        shm.close()
+                    except FileNotFoundError:
+                        # Already gone, no need to clean it up
+                        logger.debug(f"Shared memory {name} already removed")
+                        # Remove from our handles to avoid double-close
+                        if name in cls._shared_memory_handles:
+                            del cls._shared_memory_handles[name]
+                        # Decrement reference count to match resource state
+                        _decrement_shm_ref_count(name)
+                        continue
+                    
                     # Always close our handle
                     cls.close_shared_memory(name)
                     
@@ -449,22 +501,34 @@ class BaseRepository:
                     # If we're the parent process or the last reference, unlink
                     if is_parent or ref_count <= 0:
                         try:
+                            # Use a new handle since we already closed ours
                             shm = shared_memory.SharedMemory(name=name)
                             shm.close()
                             shm.unlink()
-                            logger.info(f"Cleaned up shared memory data: {name}")
+                            logger.info(f"Cleaned up shared memory: {name}")
                         except FileNotFoundError:
-                            logger.debug(f"Shared memory data already removed: {name}")
+                            logger.debug(f"Shared memory already removed: {name}")
                         except Exception as e:
-                            logger.warning(f"Error unlinking shared memory data {name}: {str(e)}")
+                            logger.warning(f"Error unlinking shared memory {name}: {str(e)}")
                     else:
                         logger.debug(f"Not unlinking {name}, ref count: {ref_count}")
                 except Exception as e:
-                    logger.warning(f"Error during cleanup of shared memory data {name}: {str(e)}")
+                    logger.warning(f"Error during cleanup of shared memory {name}: {str(e)}")
+                    # Continue with next shared memory block
+            
+            # Also check for any shared memory blocks in our handles dict that might not be in the predefined list
+            for name in list(cls._shared_memory_handles.keys()):
+                if name not in all_shared_memory_names:
+                    try:
+                        cls.close_shared_memory(name)
+                        logger.info(f"Closed additional shared memory handle: {name}")
+                    except Exception as e:
+                        logger.warning(f"Error closing additional shared memory {name}: {str(e)}")
                     
             logger.info("Shared memory cleanup completed")
         except Exception as e:
             logger.error(f"Error in shared memory cleanup: {str(e)}")
+            # Don't re-raise - it's more important to continue shutdown
     
     def __init__(self, db_manager: DatabaseManager) -> None:
         """

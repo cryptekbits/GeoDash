@@ -16,6 +16,7 @@ import werkzeug.exceptions
 
 from GeoDash.data import CityData
 from GeoDash.data.database import DatabaseManager
+from GeoDash.data.repositories import cleanup_shared_memory
 from GeoDash.utils import log_error_with_github_info
 from GeoDash.utils.logging import get_logger
 
@@ -140,6 +141,12 @@ def create_app(db_uri: Optional[str] = None) -> Flask:
     
     # Register API routes
     register_routes(app)
+    
+    # Register teardown function to ensure shared memory is cleaned up
+    @app.teardown_appcontext
+    def teardown_shared_memory(exception=None):
+        """Clean up shared memory when the application shuts down."""
+        cleanup_shared_memory()
     
     return app
 
