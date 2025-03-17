@@ -264,6 +264,22 @@ navigator.geolocation.getCurrentPosition(position => {
 });
 ```
 
+## Production Deployment
+
+For production environments, GeoDash includes a helper script:
+
+```bash
+# Start the GeoDash API server in production mode with Gunicorn
+./run_production.sh
+```
+
+The `run_production.sh` script:
+- Sets the necessary environment variables
+- Starts the application with Gunicorn using the included configuration
+- Provides better performance, reliability, and security for production deployments
+
+Note: Make sure Gunicorn is installed (`pip install gunicorn`) before using this script.
+
 ## Dependencies
 
 - pandas

@@ -5,4 +5,4 @@ include requirements.txt
 recursive-include GeoDash/data *.csv
 recursive-include GeoDash/data *.db
 recursive-include GeoDash/static *
-global-exclude *.py[cod] __pycache__ *.so *.dylib *.class 
+global-exclude *.py[cod] __pycache__ *.so *.dylib *.class run_production.sh 
