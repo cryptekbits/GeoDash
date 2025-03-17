@@ -34,6 +34,8 @@ instance/
 
 # Database
 *.db
+*.db-wal
+*.db-shm
 *.sqlite3
 *.sqlite
 *.sql
@@ -52,6 +54,7 @@ instance/
 .idea_modules/
 
 # Data files
+GeoDash/data/cities.csv
 .csv
 .xlsx
 .xls
