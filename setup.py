@@ -12,21 +12,21 @@ with open(os.path.join('GeoDash', '__init__.py'), 'r') as f:
 
 def download_city_data(max_retries=3):
     """Download the cities.csv file from a remote source.
-    
+
     Args:
         max_retries: Maximum number of download attempts before giving up.
-    
+
     Returns:
         bool: True if download succeeded, False otherwise.
     """
     data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'GeoDash', 'data')
     os.makedirs(data_dir, exist_ok=True)
-    
+
     csv_url = "https://raw.githubusercontent.com/dr5hn/countries-states-cities-database/refs/heads/master/csv/cities.csv"
     csv_path = os.path.join(data_dir, 'cities.csv')
-    
+
     print(f"Downloading cities.csv to {csv_path}...")
-    
+
     for attempt in range(1, max_retries + 1):
         try:
             urllib.request.urlretrieve(csv_url, csv_path)
@@ -72,16 +72,16 @@ class PostInstallCommand(install):
     def run(self):
         # First run the standard install
         install.run(self)
-        
+
         # Then download city data
         download_success = download_city_data()
-        
+
         # Ensure data is in the installed package
         src_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'GeoDash', 'data')
         if self.install_lib:
             dest_dir = os.path.join(self.install_lib, 'GeoDash', 'data')
             os.makedirs(dest_dir, exist_ok=True)
-            
+
             # Copy cities.csv if it exists
             csv_src = os.path.join(src_dir, 'cities.csv')
             csv_dest = os.path.join(dest_dir, 'cities.csv')
@@ -99,7 +99,7 @@ class PostDevelopCommand(develop):
     def run(self):
         develop.run(self)
         download_success = download_city_data()
-        
+
         if not download_success:
             print("\nNote: GeoDash will have limited functionality without city data.")
             print("You can run the package, but city-related features will not work.")
@@ -116,9 +116,9 @@ setup(
     description="A Python module for managing city data with fast coordinate queries and autocomplete functionality",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/cryptekbits/GeoDash-py",
+    url="https://github.com/cryptekbits/GeoDash",
     project_urls={
-        "Bug Tracker": "https://github.com/cryptekbits/GeoDash-py/issues",
+        "Bug Tracker": "https://github.com/cryptekbits/GeoDash/issues",
     },
     classifiers=[
         "Programming Language :: Python :: 3",
@@ -147,4 +147,4 @@ setup(
         'install': PostInstallCommand,
         'develop': PostDevelopCommand,
     },
-) 
+)

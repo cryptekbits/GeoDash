@@ -17,8 +17,8 @@ pip install GeoDash
 
 ```bash
 # Clone the repository
-git clone https://github.com/cryptekbits/GeoDash-py.git
-cd GeoDash-py
+git clone https://github.com/cryptekbits/GeoDash.git
+cd GeoDash
 
 # Install directly
 pip install .
@@ -33,7 +33,7 @@ If you already have the source code directory (e.g., downloaded as a ZIP and ext
 
 ```bash
 # Navigate to the GeoDash directory
-cd /path/to/GeoDash-py
+cd /path/to/GeoDash
 
 # Install the package
 pip install .
@@ -42,7 +42,7 @@ pip install .
 pip install -e .
 ```
 
-When installing from source, the city data CSV file will be automatically downloaded. If you're in an environment without internet access, you can manually place the `cities.csv` file in `GeoDash-py/data/` before installation.
+When installing from source, the city data CSV file will be automatically downloaded. If you're in an environment without internet access, you can manually place the `cities.csv` file in `GeoDash/data/` before installation.
 
 ## Features
 
@@ -458,8 +458,8 @@ For development, clone the repository and install in development mode:
 
 ```bash
 # Clone the repository
-git clone https://github.com/cryptekbits/GeoDash-py.git
-cd GeoDash-py
+git clone https://github.com/cryptekbits/GeoDash.git
+cd GeoDash
 
 # Install in development mode
 pip install -e .

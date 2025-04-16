@@ -15,7 +15,7 @@ To deploy the GeoDash API with Gunicorn:
 
 ```bash
 # Navigate to the project root directory
-cd /path/to/GeoDash-py
+cd /path/to/GeoDash
 
 # Start the server with Gunicorn, using the configuration file
 gunicorn -c GeoDash/deployment/gunicorn_config.py GeoDash.deployment.wsgi:app
@@ -48,4 +48,4 @@ These deployment examples are provided as starting points. For production deploy
 2. Configuring SSL/TLS
 3. Setting appropriate user permissions
 4. Monitoring and logging solutions
-5. Use of environment variables for sensitive configuration 
+5. Use of environment variables for sensitive configuration
