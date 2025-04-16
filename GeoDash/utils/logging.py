@@ -4,6 +4,9 @@ Centralized logging configuration for the GeoDash package.
 This module provides functions for configuring logging across the GeoDash package.
 It allows for centralized control of logging behavior and exposes functions for
 users to modify logging behavior (e.g., changing log levels).
+
+By default, simple text logging is used. Structured JSON logging can be enabled
+by setting the 'structured_logging' configuration flag to True.
 """
 
 import json
@@ -20,7 +23,7 @@ from typing import Optional, Dict, Any, Union, List, cast
 
 # Default logging format
 DEFAULT_LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-DEFAULT_JSON_FORMAT = True
+DEFAULT_JSON_FORMAT = False
 
 # Environment variable that can be used to set log level and format
 LOG_LEVEL_ENV_VAR = 'GEODASH_LOG_LEVEL'
@@ -181,7 +184,7 @@ def configure_logging(level: Optional[Union[int, str]] = None,
     Args:
         level: Log level to use (default: INFO or value from GEODASH_LOG_LEVEL env var)
         format_str: Log format string for text format (default: predefined format)
-        use_json: Whether to use JSON structured logging (default: True)
+        use_json: Whether to use JSON structured logging (default: None, will use config value)
         log_file: Optional path to a log file (if not set, logs to stderr)
     """
     global _logging_configured
@@ -209,11 +212,18 @@ def configure_logging(level: Optional[Union[int, str]] = None,
         
     # Determine if we should use JSON format
     if use_json is None:
-        env_format = os.environ.get(LOG_FORMAT_ENV_VAR, '').lower()
-        if env_format:
-            use_json = env_format == 'json'
-        else:
-            use_json = DEFAULT_JSON_FORMAT
+        # First try to get from config manager if it's available
+        try:
+            from GeoDash.config import get_config
+            config = get_config()
+            use_json = config.get('logging.structured_logging', DEFAULT_JSON_FORMAT)
+        except (ImportError, AttributeError):
+            # If config manager isn't available or doesn't have the setting
+            env_format = os.environ.get(LOG_FORMAT_ENV_VAR, '').lower()
+            if env_format:
+                use_json = env_format == 'json'
+            else:
+                use_json = DEFAULT_JSON_FORMAT
     
     # Check for log file from environment variable
     if log_file is None:
@@ -329,11 +339,20 @@ def get_logger(name: str, extra: Optional[Dict[str, Any]] = None) -> Union[loggi
     # Get the underlying logger
     logger = logging.getLogger(name)
     
-    # Determine if we're using JSON logging by checking the formatter on the first handler
-    # of the root logger
-    root_logger = logging.getLogger()
-    if root_logger.handlers and isinstance(root_logger.handlers[0].formatter, JsonFormatter):
-        # Wrap with the structured adapter for JSON logging
+    # Check if structured logging is enabled from config
+    structured_logging_enabled = False
+    try:
+        from GeoDash.config import get_config
+        config = get_config()
+        structured_logging_enabled = config.get('logging.structured_logging', DEFAULT_JSON_FORMAT)
+    except (ImportError, AttributeError):
+        # Fall back to checking formatter if config isn't available
+        root_logger = logging.getLogger()
+        if root_logger.handlers and isinstance(root_logger.handlers[0].formatter, JsonFormatter):
+            structured_logging_enabled = True
+    
+    # Return StructuredLoggerAdapter if structured logging is enabled
+    if structured_logging_enabled:
         return StructuredLoggerAdapter(logger, extra)
     
     return logger

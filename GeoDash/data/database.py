@@ -291,57 +291,82 @@ class ConnectionPool:
 
 class DatabaseManager:
     """
-    Database manager for the GeoDash package.
+    Manager for database connections and operations.
     
-    This class provides a wrapper around SQLite and PostgreSQL database connections
-    for the GeoDash package.
+    This class provides methods for managing connections to various database types
+    and performing common database operations like executing queries and managing
+    tables.
     """
     
     def __init__(self, db_uri: str, persistent: bool = False, connection_timeout: int = 30, 
                  min_pool_size: int = 2, max_pool_size: int = 10) -> None:
         """
-        Initialize the database manager with a database URI.
+        Initialize a DatabaseManager instance.
         
         Args:
             db_uri: Database URI to connect to
-            persistent: Whether to keep the connection open (True) or close after use (False)
+            persistent: Whether to keep the connection open (for worker processes)
             connection_timeout: Timeout in seconds for database connections
-            min_pool_size: Minimum number of connections to keep in the pool (if using connection pooling)
-            max_pool_size: Maximum number of connections in the pool (if using connection pooling)
+            min_pool_size: Minimum number of connections in the pool
+            max_pool_size: Maximum number of connections in the pool
         """
         self.db_uri = db_uri
         self.db_type = self._get_db_type(db_uri)
         self.persistent = persistent
-        self.connection = None
-        self._connection_lock = threading.Lock()
         self.connection_timeout = connection_timeout
         self.last_connection_time = 0
-        # Max idle time (seconds) before checking connection
-        self.max_idle_time = 300  # 5 minutes
+        self.max_idle_time = 300  # 5 minutes default idle timeout
         
-        # Connection pooling properties
-        self.use_pooling = not persistent
+        # Only try to import config if we're not already importing it (to avoid circular import)
+        try:
+            from GeoDash.config.manager import get_config
+            self.config = get_config()
+            
+            # Get pool settings from config if not explicitly provided
+            pool_enabled = self.config.is_pooling_enabled()
+            
+            if pool_enabled:
+                # Get pool settings from config
+                pool_settings = self.config.get_pool_settings()
+                min_pool_size = min_pool_size or pool_settings.get('min_size', 2)
+                max_pool_size = max_pool_size or pool_settings.get('max_size', 10)
+                connection_timeout = connection_timeout or pool_settings.get('timeout', 30)
+                self.max_idle_time = pool_settings.get('idle_timeout', 300)
+        except ImportError:
+            # Config module not available, use defaults
+            pool_enabled = True
+            
+        # Set SQLite pragmas based on advanced feature flag
+        self.use_advanced_features = True
+        try:
+            if hasattr(self, 'config'):
+                self.use_advanced_features = self.config.is_feature_enabled('enable_advanced_db')
+        except:
+            pass
+        
+        self.connection = None
         self.connection_pool = None
         
-        if self.use_pooling:
-            # Initialize connection pool
+        # Only use connection pooling for non-persistent connections to PostgreSQL
+        if self.db_type == 'postgresql' and not persistent and pool_enabled:
             self.connection_pool = ConnectionPool(
-                db_uri=db_uri,
+                db_uri, 
                 connection_timeout=connection_timeout,
                 min_connections=min_pool_size,
-                max_connections=max_pool_size,
-                max_idle_time=self.max_idle_time
+                max_connections=max_pool_size
             )
-            logger.info(f"Initialized connection pool with {min_pool_size}-{max_pool_size} connections")
-        elif self.persistent:
-            # Immediately establish a persistent connection
-            self.connection = self._get_connection()
-            self.last_connection_time = time.time()
-            logger.info(f"Established persistent {self.db_type} connection")
+            
+        logger.debug(f"Initialized DatabaseManager for {self.db_type} with URI: {db_uri}")
     
     def __del__(self) -> None:
-        """Destructor to ensure connection is closed when object is garbage collected."""
-        self.close()
+        """Cleanup during garbage collection - attempt to close connections."""
+        try:
+            # Check if this instance has been properly initialized
+            if hasattr(self, 'connection') or hasattr(self, 'connection_pool'):
+                self.close()
+        except Exception:
+            # Ignore errors during garbage collection
+            pass
     
     def __enter__(self: T) -> T:
         """Enter the context manager, return self for use in 'with' statements."""
@@ -432,139 +457,198 @@ class DatabaseManager:
     
     def _get_connection(self):
         """
-        Get a database connection.
+        Get a database connection based on the configured database type.
+        
+        For persistent connections, reuses the existing connection if available.
+        For non-persistent connections, creates a new connection.
         
         Returns:
-            Database connection
+            Database connection object
         """
+        # If we're using a connection pool, get a connection from it
+        if self.connection_pool is not None:
+            try:
+                return self.connection_pool.get_connection()
+            except Exception as e:
+                raise ConnectionError(
+                    message=f"Failed to get connection from pool: {str(e)}",
+                    user_message="The database is currently unavailable.",
+                    context={"db_uri": self.db_uri}
+                )
+                
+        # For persistent connections, reuse the existing connection if available
         if self.persistent and self.connection is not None:
-            # Check connection health for persistent connections
-            if self._check_connection():
+            try:
+                # Check if connection is still alive
+                self._check_connection()
                 return self.connection
-            
-        if self.use_pooling and self.connection_pool:
-            # Get connection from the pool
-            return self.connection_pool.get_connection()
-            
+            except Exception:
+                # If connection check fails, create a new one
+                try:
+                    self.connection = None
+                except:
+                    # Ignore any error while closing
+                    pass
+        
+        # Create a new connection
         if self.db_type == 'sqlite':
-            # SQLite URI format: sqlite:///path/to/db.sqlite
-            import sqlite3
-            
             # Extract the path from the URI
             path = self.db_uri.replace('sqlite:///', '')
-            
-            logger.info(f"Connecting to SQLite database at {path}")
             
             # Create directory if it doesn't exist
             os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
             
-            # Connect to the database (will create if it doesn't exist)
-            conn = sqlite3.connect(path, timeout=self.connection_timeout)
+            # Connect to the database
+            import sqlite3
+            connection = sqlite3.connect(path, timeout=self.connection_timeout)
             
-            # Enable foreign keys
-            conn.execute('PRAGMA foreign_keys = ON')
+            # Enable foreign keys, always safe to enable
+            connection.execute('PRAGMA foreign_keys = ON')
+            
+            # Apply additional pragmas if advanced features are enabled
+            if self.use_advanced_features:
+                # These pragmas optimize for performance but may marginally reduce durability
+                connection.execute('PRAGMA journal_mode = WAL')  # Write-Ahead Logging for better concurrency
+                connection.execute('PRAGMA synchronous = NORMAL')  # Slightly better performance
+                connection.execute('PRAGMA cache_size = -2000')  # 2MB page cache
+                connection.execute('PRAGMA temp_store = MEMORY')  # Store temp tables in memory
             
             # Return row objects as dictionaries
-            conn.row_factory = sqlite3.Row
-            
-            return conn
+            connection.row_factory = sqlite3.Row
             
         elif self.db_type == 'postgresql':
-            # PostgreSQL URI format: postgresql://user:pass@host:port/dbname
-            import psycopg2
-            from psycopg2.extras import RealDictCursor
-            
-            logger.info(f"Connecting to PostgreSQL database")
-            
-            # Extract connection parameters from the URI
-            match = re.match(r'postgresql://(?:(\w+)(?::([^@]+))?@)?([^:/]+)(?::(\d+))?/(\w+)', self.db_uri)
-            
-            if not match:
-                raise ConfigurationError(f"Invalid PostgreSQL URI: {self.db_uri}")
+            # Connect to PostgreSQL
+            try:
+                import psycopg2
+                from psycopg2.extras import RealDictCursor
                 
-            user, password, host, port, dbname = match.groups()
-            
-            # Set default values if not specified
-            if not port:
-                port = 5432
+                # Extract connection parameters from the URI
+                match = re.match(r'postgresql://(?:(\w+)(?::([^@]+))?@)?([^:/]+)(?::(\d+))?/(\w+)', self.db_uri)
                 
-            # Connect to the database with timeout
-            conn = psycopg2.connect(
-                dbname=dbname,
-                user=user,
-                password=password,
-                host=host,
-                port=port,
-                connect_timeout=self.connection_timeout
+                if not match:
+                    raise ConfigurationError(
+                        message=f"Invalid PostgreSQL URI: {self.db_uri}",
+                        user_message="The database configuration is invalid.",
+                        context={"db_uri": self.db_uri}
+                    )
+                    
+                user, password, host, port, dbname = match.groups()
+                
+                # Set default values
+                port = port or 5432
+                
+                # Additional connection parameters for performance
+                conn_params = {}
+                if self.use_advanced_features:
+                    conn_params.update({
+                        'application_name': 'GeoDash',
+                        'client_encoding': 'utf8',
+                        'options': '-c statement_timeout=30000'  # 30 seconds timeout
+                    })
+                
+                # Connect to the database
+                connection = psycopg2.connect(
+                    dbname=dbname,
+                    user=user,
+                    password=password,
+                    host=host,
+                    port=port,
+                    connect_timeout=self.connection_timeout,
+                    **conn_params
+                )
+                
+                # Set cursor factory for returning dictionaries
+                connection.cursor_factory = RealDictCursor
+                
+            except ImportError:
+                raise ConfigurationError(
+                    message="PostgreSQL support requires psycopg2 package",
+                    user_message="Database connection failed because the required library is not installed.",
+                    hint="Install psycopg2 with: pip install psycopg2-binary"
+                )
+            except Exception as e:
+                raise ConnectionError(
+                    message=f"Failed to connect to PostgreSQL: {str(e)}",
+                    user_message="Could not connect to the PostgreSQL database.",
+                    context={"db_uri": self.db_uri}
+                )
+        else:
+            raise ConfigurationError(
+                message=f"Technical error: Unsupported database type: {self.db_type}",
+                user_message="The database configuration is invalid."
             )
             
-            return conn
+        # Store connection for reuse if persistent
+        if self.persistent:
+            self.connection = connection
             
-        else:
-            raise ConfigurationError(f"Unsupported database type: {self.db_type}")
+        return connection
     
     def cursor(self) -> Union['DatabaseCursor', 'PersistentCursor', 'PooledCursor']:
         """
-        Get a cursor for executing database operations.
+        Get a database cursor for executing SQL statements.
         
-        This method returns a cursor as a context manager, which will be
-        automatically closed when exiting the context.
+        For persistent connections, returns a cursor that shares the persistent connection.
+        For non-persistent connections, returns a cursor that will close when the context
+        manager exits.
         
         Returns:
-            Database cursor context manager
-        
-        Raises:
-            ConnectionError: If there's an error getting a connection or cursor
+            Database cursor appropriate for the connection type
         """
-        if self.use_pooling and self.connection_pool:
-            try:
-                # Get a connection from the pool and create a PooledCursor
+        try:
+            # If using a connection pool, return a pooled cursor
+            if self.connection_pool is not None:
                 connection = self.connection_pool.get_connection()
                 return PooledCursor(connection, self.connection_pool)
-            except Exception as e:
-                logger.error(f"Error getting pooled cursor: {str(e)}")
-                raise ConnectionError(f"Failed to get database cursor from pool: {str(e)}")
                 
-        with self._connection_lock:
+            # If using a persistent connection, return a persistent cursor
             if self.persistent:
-                try:
-                    if not self._check_connection():
-                        self.connection = self._get_connection()
-                        self.last_connection_time = time.time()
-                    
-                    # Create a PersistentCursor that wraps the cursor but doesn't close the connection
-                    return PersistentCursor(self.connection.cursor(), self.connection)
-                except Exception as e:
-                    logger.error(f"Error getting persistent cursor: {str(e)}")
-                    try:
-                        # Try to reconnect
-                        self.connection = self._get_connection()
-                        self.last_connection_time = time.time()
-                        return PersistentCursor(self.connection.cursor(), self.connection)
-                    except Exception as reconnect_error:
-                        logger.error(f"Failed to reconnect for cursor: {str(reconnect_error)}")
-                        raise ConnectionError(f"Failed to get database cursor: {str(reconnect_error)}")
-            
-            # For non-persistent connections, use the DatabaseCursor context manager
+                if not self.connection or not self._check_connection():
+                    # Create a new connection if necessary
+                    self.connection = self._get_connection()
+                
+                # Create a cursor from the persistent connection
+                cursor = self.connection.cursor()
+                return PersistentCursor(cursor, self.connection)
+                
+            # Otherwise, return a regular DatabaseCursor
             return DatabaseCursor(self)
+        except Exception as e:
+            # Log the error and re-raise
+            logger.error(f"Error creating cursor: {str(e)}")
+            raise ConnectionError(
+                message=f"Failed to create database cursor: {str(e)}",
+                user_message="Could not connect to the database.",
+                context={"db_uri": self.db_uri}
+            )
     
     def close(self) -> None:
-        """Close the database connection(s)."""
-        with self._connection_lock:
-            if self.connection_pool:
-                # Close all connections in the pool
+        """
+        Close the database connection and release resources.
+        
+        For persistent connections, this is a no-op unless force=True.
+        For connection pools, this closes all connections in the pool.
+        """
+        try:
+            # Close pooled connections if they exist
+            if self.connection_pool is not None:
+                logger.debug(f"Closing connection pool")
                 self.connection_pool.close_all()
                 self.connection_pool = None
-                logger.debug("Connection pool closed")
             
-            if self.connection:
+            # Close persistent connection if it exists
+            if self.connection is not None:
+                logger.debug(f"Closing persistent connection")
                 try:
                     self.connection.close()
-                    logger.debug("Database connection closed")
                 except Exception as e:
-                    logger.error(f"Error closing database connection: {str(e)}")
-                finally:
-                    self.connection = None
+                    logger.warning(f"Error closing connection: {str(e)}")
+                self.connection = None
+                
+            logger.debug("Database connections closed")
+        except Exception as e:
+            logger.error(f"Error closing database connections: {str(e)}")
+            # Don't re-raise, as close() is often called during cleanup
     
     def table_exists(self, table_name: str) -> bool:
         """
@@ -901,3 +985,73 @@ class PersistentCursor:
                     self.cursor.close()
             except Exception as e:
                 logger.error(f"Error closing cursor: {str(e)}") 
+
+def create_db_manager_from_config() -> DatabaseManager:
+    """
+    Creates a DatabaseManager using the configuration settings.
+    
+    This function reads the database configuration from the ConfigManager
+    and creates a properly configured DatabaseManager instance.
+    
+    Returns:
+        Configured DatabaseManager instance
+    """
+    from GeoDash.config.manager import get_config
+    
+    # Get the configuration manager
+    config = get_config()
+    
+    # Get database URI from config
+    db_uri = config.get_database_uri()
+    
+    # Check if pooling is enabled
+    use_pooling = config.is_pooling_enabled()
+    
+    if use_pooling:
+        # Get pool settings
+        pool_settings = config.get_pool_settings()
+        
+        # Create the database manager with pooling
+        db_manager = DatabaseManager(
+            db_uri=db_uri,
+            persistent=False,  # Not using persistent connections when pooling
+            connection_timeout=pool_settings["timeout"],
+            min_pool_size=pool_settings["min_size"],
+            max_pool_size=pool_settings["max_size"]
+        )
+    else:
+        # Create the database manager without pooling
+        db_manager = DatabaseManager(
+            db_uri=db_uri,
+            persistent=True  # Use persistent connections when not pooling
+        )
+    
+    # Configure database-specific options
+    
+    # For SQLite databases
+    if db_uri.startswith("sqlite:"):
+        # Check if R-Tree support is enabled
+        rtree_enabled = config.get("database.sqlite.rtree", True)
+        
+        # Check if FTS (Full-Text Search) is enabled
+        fts_enabled = config.get("database.sqlite.fts", True)
+        
+        # Configure SQLite-specific settings here if needed
+        if rtree_enabled and db_manager.has_rtree_support():
+            logger.debug("R-Tree spatial indexing is enabled")
+        else:
+            logger.warning("R-Tree spatial indexing is disabled or not supported")
+        
+        # More SQLite-specific configuration can be added here
+    
+    # For PostgreSQL databases
+    elif db_uri.startswith("postgresql:"):
+        # Check if PostGIS extension should be enabled
+        postgis_enabled = config.get("database.postgresql.postgis", True)
+        
+        if postgis_enabled:
+            logger.debug("PostGIS extension will be used if available")
+            # PostGIS initialization logic could be added here
+    
+    logger.info(f"Database manager created with URI type: {db_uri.split(':')[0]}")
+    return db_manager 

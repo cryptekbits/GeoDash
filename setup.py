@@ -136,6 +136,7 @@ setup(
         "flask>=2.0.0",
         "psycopg2-binary>=2.9.0",
         "click>=8.0.0",
+        "PyYAML>=6.0",
     ],
     entry_points={
         "console_scripts": [

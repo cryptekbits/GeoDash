@@ -7,6 +7,7 @@ pandas>=1.3.0
 flask>=2.0.0
 psycopg2-binary>=2.9.0
 click>=8.0.0
+PyYAML>=6.0
 
 # Additional development dependencies
 gunicorn>=20.1.0

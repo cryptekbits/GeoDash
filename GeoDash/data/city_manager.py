@@ -18,6 +18,7 @@ from GeoDash.data.repositories import (
     get_region_repository
 )
 from GeoDash.utils.logging import get_logger
+from GeoDash.config.manager import get_config
 
 # Get a logger for this module
 logger = get_logger(__name__)
@@ -32,25 +33,39 @@ class CityData:
     a unified interface for city data operations.
     """
     
-    def __init__(self, db_uri: Optional[str] = None, persistent: bool = False) -> None:
+    def __init__(self, db_uri: Optional[str] = None, persistent: bool = False, config = None) -> None:
         """
         Initialize the CityData manager.
         
         Args:
-            db_uri: Database URI to connect to. If None, uses SQLite in the data directory.
+            db_uri: Database URI to connect to. If None, uses config or default.
             persistent: Whether to keep database connections open (for worker processes)
+            config: Configuration manager instance. If None, gets global instance.
         """
-        # If no URI provided, use SQLite in data directory
+        # Get config instance if not provided
+        if config is None:
+            config = get_config()
+        
+        self.config = config
+        
+        # If no URI provided, use the one from config
         if db_uri is None:
-            data_dir = get_data_directory()
-            db_uri = f"sqlite:///{os.path.join(data_dir, 'cities.db')}"
+            db_uri = config.get_database_uri()
             
         worker_id = os.environ.get('GUNICORN_WORKER_ID', 'standalone')
         logger.info(f"Process {worker_id}: Initializing CityData with database URI: {db_uri} (persistent: {persistent})")
         
         # Initialize managers and repositories
-        self.db_manager = DatabaseManager(db_uri, persistent=persistent)
-        self.schema_manager = SchemaManager(self.db_manager)
+        pool_settings = config.get_pool_settings()
+        self.db_manager = DatabaseManager(
+            db_uri, 
+            persistent=persistent,
+            min_pool_size=pool_settings.get('min_size'),
+            max_pool_size=pool_settings.get('max_size'),
+            connection_timeout=pool_settings.get('timeout')
+        )
+        
+        self.schema_manager = SchemaManager(self.db_manager, config)
         self.data_importer = CityDataImporter(self.db_manager)
         
         # Use the shared memory singleton repository pattern
@@ -84,7 +99,7 @@ class CityData:
         # Keep track of persistence
         self.persistent = persistent
     
-    def import_city_data(self, csv_path: Optional[str] = None, batch_size: int = 5000) -> bool:
+    def import_city_data(self, csv_path: Optional[str] = None, batch_size: int = None) -> bool:
         """
         Import city data from a CSV file.
         
@@ -102,13 +117,23 @@ class CityData:
                 logger.info(f"Database already contains {count} cities. Import not needed.")
                 return True
                 
+            # Get batch size from config if not provided
+            if batch_size is None:
+                batch_size = self.config.get("data.batch_size", 5000)
+                
             # Try to import from provided or found csv
-            imported = self.data_importer.import_from_csv(csv_path, batch_size, download_if_missing=True)
+            auto_fetch = self.config.is_feature_enabled('auto_fetch_data')
+            imported = self.data_importer.import_from_csv(csv_path, batch_size, download_if_missing=auto_fetch)
+            
+            # Filter cities by country if needed
+            if imported > 0:
+                self._filter_by_countries()
+                
             return imported > 0
         except Exception as e:
             logger.error(f"Error importing city data: {str(e)}")
             # If import failed and we don't have a specific path, try to download explicitly
-            if csv_path is None:
+            if csv_path is None and self.config.is_feature_enabled('auto_fetch_data'):
                 try:
                     from GeoDash.data.importer import download_city_data
                     csv_path = download_city_data(force=True)
@@ -119,11 +144,48 @@ class CityData:
                         cursor.execute(f"DELETE FROM city_data")
                         logger.info("Cleared existing data before retrying import")
                     
+                    # Get batch size from config if not provided
+                    if batch_size is None:
+                        batch_size = self.config.get("data.batch_size", 5000)
+                        
                     imported = self.data_importer.import_from_csv(csv_path, batch_size, download_if_missing=False)
+                    
+                    # Filter cities by country if needed
+                    if imported > 0:
+                        self._filter_by_countries()
+                        
                     return imported > 0
                 except Exception as download_err:
                     logger.error(f"Error during retry with explicit download: {str(download_err)}")
             return False
+    
+    def _filter_by_countries(self) -> None:
+        """
+        Filter cities by enabled countries from configuration.
+        Only keeps cities from specified countries.
+        """
+        enabled_countries = self.config.get_enabled_countries()
+        
+        # Only apply filtering if specific countries are configured
+        if enabled_countries is not None and enabled_countries:
+            logger.info(f"Filtering cities to only include countries: {', '.join(enabled_countries)}")
+            
+            with self.db_manager.cursor() as cursor:
+                # Construct a parameterized query with the list of countries
+                placeholders = ','.join(['?' for _ in enabled_countries])
+                
+                # Delete cities that are not in the enabled countries list
+                cursor.execute(
+                    f"DELETE FROM city_data WHERE country_code NOT IN ({placeholders})",
+                    tuple(enabled_countries)
+                )
+                
+                rows_deleted = cursor.rowcount if hasattr(cursor, 'rowcount') else -1
+                
+                if rows_deleted > 0:
+                    logger.info(f"Removed {rows_deleted} cities from non-enabled countries")
+                else:
+                    logger.info("No cities needed to be removed during country filtering")
     
     @lru_cache(maxsize=5000)
     def search_cities(
@@ -150,13 +212,38 @@ class CityData:
             List of matching cities as dictionaries, prioritized by proximity
             to user's location when provided
         """
+        # Get search limits from config
+        search_limits = self.config.get_search_limits()
+        max_limit = search_limits.get('max', 100)
+        default_limit = search_limits.get('default', 10)
+        
+        # Apply limit constraints
+        if limit is None:
+            limit = default_limit
+        elif limit > max_limit:
+            limit = max_limit
+        
+        # Check if search should be filtered by enabled countries
+        enabled_countries = self.config.get_enabled_countries()
+        if enabled_countries is not None and country is None:
+            # If user's country is in enabled countries, prioritize it
+            if user_country in enabled_countries:
+                country = user_country
+        
+        # Get fuzzy search settings
+        fuzzy_settings = self.config.get_fuzzy_settings()
+        fuzzy_threshold = fuzzy_settings.get('threshold', 70)
+        fuzzy_enabled = self.config.is_feature_enabled('enable_fuzzy_search')
+        
+        # Pass the settings to the repository
         return self.city_repository.search(
             query, 
             limit, 
             country, 
             user_lat=user_lat, 
             user_lng=user_lng, 
-            user_country=user_country
+            user_country=user_country,
+            fuzzy_threshold=fuzzy_threshold if fuzzy_enabled else None
         )
     
     @lru_cache(maxsize=1000)

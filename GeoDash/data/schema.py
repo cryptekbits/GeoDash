@@ -7,6 +7,7 @@ This module provides schema definitions and management for the GeoDash database.
 from typing import List, Dict, Any, Optional, Tuple, Set, Union, cast
 from GeoDash.data.database import DatabaseManager
 from GeoDash.utils.logging import get_logger
+from GeoDash.config.manager import get_config
 
 # Get a logger for this module
 logger = get_logger(__name__)
@@ -19,15 +20,22 @@ class SchemaManager:
     for the GeoDash database.
     """
     
-    def __init__(self, db_manager: DatabaseManager) -> None:
+    def __init__(self, db_manager: DatabaseManager, config = None) -> None:
         """
         Initialize the SchemaManager with a database manager.
         
         Args:
             db_manager: The database manager to use for schema operations
+            config: Configuration manager instance. If None, gets global instance.
         """
         self.db_manager = db_manager
         self.city_table_name = 'city_data'
+        
+        # Get config instance if not provided
+        if config is None:
+            config = get_config()
+            
+        self.config = config
     
     def ensure_schema_exists(self) -> None:
         """
@@ -39,22 +47,29 @@ class SchemaManager:
             
             # Log information about R*Tree support for new databases
             if self.db_manager.db_type == 'sqlite':
-                has_rtree = self.db_manager.has_rtree_support()
-                if has_rtree:
-                    logger.info("SQLite database initialized with R*Tree spatial index support.")
-                    # Check if the R*Tree index was created
-                    with self.db_manager.cursor() as cursor:
-                        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='city_rtree'")
-                        rtree_exists = cursor.fetchone()
-                        if rtree_exists:
-                            logger.info("R*Tree spatial index is ready for use.")
-                        else:
-                            logger.warning("R*Tree spatial index was not created during initialization.")
+                # Only check for R*Tree if the feature is enabled
+                rtree_enabled = self.config.get("database.sqlite.rtree", True)
+                if rtree_enabled:
+                    has_rtree = self.db_manager.has_rtree_support()
+                    if has_rtree:
+                        logger.info("SQLite database initialized with R*Tree spatial index support.")
+                        # Check if the R*Tree index was created
+                        with self.db_manager.cursor() as cursor:
+                            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='city_rtree'")
+                            rtree_exists = cursor.fetchone()
+                            if rtree_exists:
+                                logger.info("R*Tree spatial index is ready for use.")
+                            else:
+                                logger.warning("R*Tree spatial index was not created during initialization.")
+                    else:
+                        logger.warning("SQLite database initialized without R*Tree support. Spatial queries will be slower.")
                 else:
-                    logger.warning("SQLite database initialized without R*Tree support. Spatial queries will be slower.")
+                    logger.info("R*Tree spatial indexing is disabled in configuration")
         else:
             logger.info(f"Table {self.city_table_name} already exists.")
-            self._ensure_rtree_populated()
+            # Only ensure R*Tree is populated if the feature is enabled
+            if self.db_manager.db_type == 'sqlite' and self.config.get("database.sqlite.rtree", True):
+                self._ensure_rtree_populated()
     
     def _ensure_rtree_populated(self) -> None:
         """
@@ -62,6 +77,11 @@ class SchemaManager:
         This is especially important if the R*Tree index was added after data was loaded.
         """
         if self.db_manager.db_type == 'sqlite':
+            # Only proceed if R*Tree is enabled in config
+            if not self.config.get("database.sqlite.rtree", True):
+                logger.info("R*Tree is disabled in configuration. Skipping index population.")
+                return
+                
             try:
                 # First check if R*Tree is supported in this SQLite build
                 rtree_supported = self.db_manager.has_rtree_support()
@@ -173,16 +193,20 @@ class SchemaManager:
             CREATE TABLE city_data (
                 id INTEGER PRIMARY KEY,
                 name TEXT NOT NULL,
-                ascii_name TEXT NOT NULL,
+                ascii_name TEXT,
                 state_id INTEGER,
                 state_code TEXT,
+                state_name TEXT,
                 state TEXT,
                 country_id INTEGER,
                 country_code CHAR(2) NOT NULL,
-                country TEXT NOT NULL,
+                country_name TEXT,
+                country TEXT,
                 lat REAL NOT NULL,
                 lng REAL NOT NULL,
-                wiki_data_id TEXT
+                wikidata_id TEXT,
+                population INTEGER,
+                timezone TEXT
             )
             '''
         else:  # PostgreSQL
@@ -191,16 +215,20 @@ class SchemaManager:
             CREATE TABLE city_data (
                 id SERIAL PRIMARY KEY,
                 name TEXT NOT NULL,
-                ascii_name TEXT NOT NULL,
+                ascii_name TEXT,
                 state_id INTEGER,
                 state_code TEXT,
+                state_name TEXT,
                 state TEXT,
                 country_id INTEGER,
                 country_code CHAR(2) NOT NULL,
-                country TEXT NOT NULL,
+                country_name TEXT,
+                country TEXT,
                 lat DOUBLE PRECISION NOT NULL,
                 lng DOUBLE PRECISION NOT NULL,
-                wiki_data_id TEXT
+                wikidata_id TEXT,
+                population INTEGER,
+                timezone TEXT
             )
             '''
         
@@ -228,204 +256,237 @@ class SchemaManager:
         
         # Add SQLite R*Tree spatial index if using SQLite
         if self.db_manager.db_type == 'sqlite':
-            try:
-                # Use the new method to check R*Tree support
-                rtree_enabled = self.db_manager.has_rtree_support()
-                
-                if rtree_enabled:
-                    logger.info("Creating SQLite R*Tree spatial index for efficient spatial queries")
+            # Only create R*Tree if enabled in config
+            rtree_enabled = self.config.get("database.sqlite.rtree", True)
+            
+            if rtree_enabled:
+                try:
+                    # Use the method to check R*Tree support
+                    rtree_supported = self.db_manager.has_rtree_support()
                     
-                    with self.db_manager.cursor() as cursor:
-                        # Create a virtual table using R*Tree for spatial indexing
-                        cursor.execute(f'''
-                        CREATE VIRTUAL TABLE IF NOT EXISTS city_rtree USING rtree(
-                            id,             -- Integer primary key
-                            min_lat, max_lat,  -- Latitude range
-                            min_lng, max_lng   -- Longitude range
-                        )
-                        ''')
+                    if rtree_supported:
+                        logger.info("Creating SQLite R*Tree spatial index for efficient spatial queries")
                         
-                        # Populate the R*Tree index with existing data
-                        cursor.execute(f'''
-                        INSERT OR REPLACE INTO city_rtree 
-                        SELECT id, lat, lat, lng, lng FROM {self.city_table_name}
-                        ''')
-                        
-                        # Create triggers to keep the R*Tree index updated
-                        # Trigger for INSERT
-                        cursor.execute(f'''
-                        CREATE TRIGGER IF NOT EXISTS city_rtree_insert AFTER INSERT ON {self.city_table_name}
-                        BEGIN
-                            INSERT INTO city_rtree VALUES (new.id, new.lat, new.lat, new.lng, new.lng);
-                        END;
-                        ''')
-                        
-                        # Trigger for UPDATE
-                        cursor.execute(f'''
-                        CREATE TRIGGER IF NOT EXISTS city_rtree_update AFTER UPDATE ON {self.city_table_name}
-                        BEGIN
-                            UPDATE city_rtree SET 
-                                min_lat = new.lat, max_lat = new.lat,
-                                min_lng = new.lng, max_lng = new.lng
-                            WHERE id = new.id;
-                        END;
-                        ''')
-                        
-                        # Trigger for DELETE
-                        cursor.execute(f'''
-                        CREATE TRIGGER IF NOT EXISTS city_rtree_delete AFTER DELETE ON {self.city_table_name}
-                        BEGIN
-                            DELETE FROM city_rtree WHERE id = old.id;
-                        END;
-                        ''')
-                        
-                        logger.info("Successfully created SQLite R*Tree spatial index with triggers")
-                else:
-                    logger.warning("R*Tree module not available in this SQLite build. Spatial queries will be slower.")
-                    logger.warning("Consider using a SQLite build with R*Tree support for better performance with spatial queries.")
-            except Exception as e:
-                logger.warning(f"Could not create SQLite R*Tree spatial index: {str(e)}")
-                logger.warning("Spatial queries will use the slower Haversine method for all records.")
-                import traceback
-                logger.debug(traceback.format_exc())
+                        with self.db_manager.cursor() as cursor:
+                            # Create a virtual table using R*Tree for spatial indexing
+                            cursor.execute(f'''
+                            CREATE VIRTUAL TABLE IF NOT EXISTS city_rtree USING rtree(
+                                id,             -- Integer primary key
+                                min_lat, max_lat,  -- Latitude range
+                                min_lng, max_lng   -- Longitude range
+                            )
+                            ''')
+                            
+                            # Create triggers to keep the R*Tree index updated
+                            cursor.execute(f'''
+                            CREATE TRIGGER IF NOT EXISTS city_rtree_insert AFTER INSERT ON {self.city_table_name}
+                            BEGIN
+                                INSERT INTO city_rtree VALUES (new.id, new.lat, new.lat, new.lng, new.lng);
+                            END;
+                            ''')
+                            
+                            cursor.execute(f'''
+                            CREATE TRIGGER IF NOT EXISTS city_rtree_update AFTER UPDATE ON {self.city_table_name}
+                            BEGIN
+                                UPDATE city_rtree SET 
+                                    min_lat = new.lat, max_lat = new.lat,
+                                    min_lng = new.lng, max_lng = new.lng
+                                WHERE id = new.id;
+                            END;
+                            ''')
+                            
+                            cursor.execute(f'''
+                            CREATE TRIGGER IF NOT EXISTS city_rtree_delete AFTER DELETE ON {self.city_table_name}
+                            BEGIN
+                                DELETE FROM city_rtree WHERE id = old.id;
+                            END;
+                            ''')
+                            
+                            logger.info("Created R*Tree spatial index tables and triggers")
+                    else:
+                        logger.warning("R*Tree not supported in this SQLite build. Using slower spatial query methods.")
+                except Exception as e:
+                    logger.warning(f"Error creating R*Tree index: {str(e)}")
+            else:
+                logger.info("R*Tree spatial indexing is disabled in configuration")
         
-        # Add PostGIS spatial index for PostgreSQL if available
-        if self.db_manager.db_type == 'postgresql':
-            try:
-                with self.db_manager.cursor() as cursor:
-                    # Try to add PostGIS extension and spatial index
-                    cursor.execute('CREATE EXTENSION IF NOT EXISTS postgis')
-                    cursor.execute(f"SELECT AddGeometryColumn('{self.city_table_name}', 'geom', 4326, 'POINT', 2)")
-                    cursor.execute(f"CREATE INDEX idx_city_geom ON {self.city_table_name} USING GIST(geom)")
-                    logger.info("Created PostGIS spatial index")
-            except Exception as e:
-                logger.warning(f"Could not create PostGIS spatial index: {str(e)}")
-                
+        # Add PostGIS index if using PostgreSQL and enabled in config
+        elif self.db_manager.db_type == 'postgresql':
+            postgis_enabled = self.config.get("database.postgresql.postgis", True)
+            
+            if postgis_enabled and self.config.is_feature_enabled('enable_advanced_db'):
+                try:
+                    with self.db_manager.cursor() as cursor:
+                        # Check if PostGIS extension is available
+                        cursor.execute("SELECT 1 FROM pg_extension WHERE extname = 'postgis'")
+                        has_postgis = cursor.fetchone()
+                        
+                        if not has_postgis:
+                            # Try to create the extension
+                            try:
+                                cursor.execute("CREATE EXTENSION IF NOT EXISTS postgis")
+                                logger.info("Created PostGIS extension for advanced spatial queries")
+                            except Exception as ext_error:
+                                logger.warning(f"Could not create PostGIS extension: {str(ext_error)}")
+                                logger.warning("PostGIS spatial index will not be created")
+                                return
+                        
+                        # Create a GiST index for fast spatial queries
+                        cursor.execute(f'''
+                        CREATE INDEX IF NOT EXISTS idx_city_geography ON {self.city_table_name}
+                        USING gist (ST_SetSRID(ST_MakePoint(lng, lat), 4326))
+                        ''')
+                        
+                        logger.info("Created PostgreSQL spatial index using PostGIS")
+                except Exception as e:
+                    logger.warning(f"Error creating PostGIS index: {str(e)}")
+            else:
+                logger.info("PostGIS spatial indexing is disabled in configuration or advanced features are disabled")
+    
     def _create_search_optimizations(self) -> None:
         """
-        Create full-text search optimizations for each database type.
-        For SQLite: Create an FTS5 virtual table
-        For PostgreSQL: Add tsvector column with GIN index
+        Create search optimizations for city data queries.
         """
+        # Create full-text search indexes if enabled
         if self.db_manager.db_type == 'sqlite':
-            # Create an FTS5 virtual table for SQLite
-            try:
-                # Check if FTS5 is available
-                has_fts5 = False
-                with self.db_manager.cursor() as cursor:
-                    cursor.execute("SELECT sqlite_compileoption_used('ENABLE_FTS5')")
-                    has_fts5 = bool(cursor.fetchone()[0])
-                
-                if has_fts5:
-                    # Create FTS5 virtual table
+            # Check if FTS is enabled in config
+            fts_enabled = self.config.get("database.sqlite.fts", True)
+            
+            if fts_enabled and self.config.is_feature_enabled('enable_advanced_db'):
+                try:
                     with self.db_manager.cursor() as cursor:
-                        cursor.execute("""
-                        CREATE VIRTUAL TABLE IF NOT EXISTS city_search USING fts5(
-                            id UNINDEXED,
-                            name, 
-                            ascii_name,
-                            country,
-                            state,
+                        # Create FTS5 virtual table for better text search
+                        cursor.execute('''
+                        CREATE VIRTUAL TABLE IF NOT EXISTS city_fts USING fts5(
+                            name, ascii_name, state, country,
                             content='city_data',
                             content_rowid='id'
                         )
-                        """)
+                        ''')
                         
-                        # Populate the FTS5 table with existing data
-                        cursor.execute("""
-                        INSERT INTO city_search(rowid, name, ascii_name, country, state)
-                        SELECT id, name, ascii_name, country, state FROM city_data
-                        """)
-                        
-                        # Create triggers to keep the FTS table in sync with the main table
-                        cursor.execute("""
-                        CREATE TRIGGER IF NOT EXISTS city_data_ai AFTER INSERT ON city_data BEGIN
-                            INSERT INTO city_search(rowid, name, ascii_name, country, state)
-                            VALUES (new.id, new.name, new.ascii_name, new.country, new.state);
+                        # Create triggers to keep FTS index updated
+                        cursor.execute(f'''
+                        CREATE TRIGGER IF NOT EXISTS city_fts_insert AFTER INSERT ON {self.city_table_name}
+                        BEGIN
+                            INSERT INTO city_fts(rowid, name, ascii_name, state, country)
+                            VALUES (new.id, new.name, new.ascii_name, new.state, new.country);
                         END;
-                        """)
+                        ''')
                         
-                        cursor.execute("""
-                        CREATE TRIGGER IF NOT EXISTS city_data_ad AFTER DELETE ON city_data BEGIN
-                            INSERT INTO city_search(city_search, rowid, name, ascii_name, country, state)
-                            VALUES ('delete', old.id, old.name, old.ascii_name, old.country, old.state);
+                        cursor.execute(f'''
+                        CREATE TRIGGER IF NOT EXISTS city_fts_update AFTER UPDATE ON {self.city_table_name}
+                        BEGIN
+                            UPDATE city_fts SET
+                                name = new.name,
+                                ascii_name = new.ascii_name,
+                                state = new.state,
+                                country = new.country
+                            WHERE rowid = new.id;
                         END;
-                        """)
+                        ''')
                         
-                        cursor.execute("""
-                        CREATE TRIGGER IF NOT EXISTS city_data_au AFTER UPDATE ON city_data BEGIN
-                            INSERT INTO city_search(city_search, rowid, name, ascii_name, country, state)
-                            VALUES ('delete', old.id, old.name, old.ascii_name, old.country, old.state);
-                            INSERT INTO city_search(rowid, name, ascii_name, country, state)
-                            VALUES (new.id, new.name, new.ascii_name, new.country, new.state);
+                        cursor.execute(f'''
+                        CREATE TRIGGER IF NOT EXISTS city_fts_delete AFTER DELETE ON {self.city_table_name}
+                        BEGIN
+                            DELETE FROM city_fts WHERE rowid = old.id;
                         END;
-                        """)
-                    
-                    logger.info("Created FTS5 virtual table for city search")
-                else:
-                    logger.warning("FTS5 is not available in this SQLite build. Falling back to LIKE queries.")
-            except Exception as e:
-                logger.warning(f"Could not create FTS5 virtual table: {str(e)}")
-                
-        elif self.db_manager.db_type == 'postgresql':
-            # Add tsvector column and GIN index for PostgreSQL
+                        ''')
+                        
+                        logger.info("Created SQLite FTS5 index for improved text search")
+                except Exception as e:
+                    logger.warning(f"Error creating FTS index: {str(e)}")
+                    # Try FTS4 as fallback
+                    try:
+                        with self.db_manager.cursor() as cursor:
+                            # Create FTS4 virtual table instead
+                            cursor.execute('''
+                            CREATE VIRTUAL TABLE IF NOT EXISTS city_fts USING fts4(
+                                name, ascii_name, state, country,
+                                content='city_data',
+                                content_rowid='id'
+                            )
+                            ''')
+                            
+                            # Create triggers to keep FTS index updated
+                            cursor.execute(f'''
+                            CREATE TRIGGER IF NOT EXISTS city_fts_insert AFTER INSERT ON {self.city_table_name}
+                            BEGIN
+                                INSERT INTO city_fts(docid, name, ascii_name, state, country)
+                                VALUES (new.id, new.name, new.ascii_name, new.state, new.country);
+                            END;
+                            ''')
+                            
+                            cursor.execute(f'''
+                            CREATE TRIGGER IF NOT EXISTS city_fts_update AFTER UPDATE ON {self.city_table_name}
+                            BEGIN
+                                UPDATE city_fts SET
+                                    name = new.name,
+                                    ascii_name = new.ascii_name,
+                                    state = new.state,
+                                    country = new.country
+                                WHERE docid = new.id;
+                            END;
+                            ''')
+                            
+                            cursor.execute(f'''
+                            CREATE TRIGGER IF NOT EXISTS city_fts_delete AFTER DELETE ON {self.city_table_name}
+                            BEGIN
+                                DELETE FROM city_fts WHERE docid = old.id;
+                            END;
+                            ''')
+                            
+                            logger.info("Created SQLite FTS4 index as fallback for improved text search")
+                    except Exception as e2:
+                        logger.warning(f"Failed to create FTS4 fallback index: {str(e2)}")
+            else:
+                logger.info("Full-text search indexing is disabled in configuration or advanced features are disabled")
+        
+        # For PostgreSQL, create tsvector columns and GIN index if enabled
+        elif self.db_manager.db_type == 'postgresql' and self.config.is_feature_enabled('enable_advanced_db'):
             try:
                 with self.db_manager.cursor() as cursor:
-                    # Check if the tsvector column already exists
-                    cursor.execute(f"""
-                    SELECT column_name FROM information_schema.columns 
-                    WHERE table_name = '{self.city_table_name}' AND column_name = 'search_vector'
-                    """)
-                    if not cursor.fetchone():
-                        # Add the tsvector column
-                        cursor.execute(f"""
-                        ALTER TABLE {self.city_table_name} 
-                        ADD COLUMN search_vector tsvector
-                        """)
-                        
-                        # Populate the tsvector column
-                        cursor.execute(f"""
-                        UPDATE {self.city_table_name} 
-                        SET search_vector = to_tsvector('english', 
-                            coalesce(name,'') || ' ' || 
-                            coalesce(ascii_name,'') || ' ' || 
-                            coalesce(country,'') || ' ' || 
-                            coalesce(state,'')
-                        )
-                        """)
-                        
-                        # Create GIN index on the tsvector column
-                        cursor.execute(f"""
-                        CREATE INDEX idx_city_search ON {self.city_table_name} 
-                        USING GIN(search_vector)
-                        """)
-                        
-                        # Create trigger to keep the tsvector column up to date
-                        cursor.execute(f"""
-                        CREATE OR REPLACE FUNCTION city_search_trigger() RETURNS trigger AS $$
-                        BEGIN
-                            NEW.search_vector = to_tsvector('english', 
-                                coalesce(NEW.name,'') || ' ' || 
-                                coalesce(NEW.ascii_name,'') || ' ' || 
-                                coalesce(NEW.country,'') || ' ' || 
-                                coalesce(NEW.state,'')
-                            );
-                            RETURN NEW;
-                        END
-                        $$ LANGUAGE plpgsql;
-                        """)
-                        
-                        cursor.execute(f"""
-                        CREATE TRIGGER tsvector_update_trigger BEFORE INSERT OR UPDATE
-                        ON {self.city_table_name} FOR EACH ROW
-                        EXECUTE FUNCTION city_search_trigger();
-                        """)
-                        
-                        logger.info("Created tsvector column and GIN index for PostgreSQL full-text search")
-                    else:
-                        logger.info("tsvector column already exists")
+                    # Add tsvector columns if they don't exist
+                    cursor.execute(f'''
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns 
+                            WHERE table_name = '{self.city_table_name}' AND column_name = 'search_vector'
+                        ) THEN
+                            ALTER TABLE {self.city_table_name} ADD COLUMN search_vector tsvector;
+                            
+                            -- Populate search vector
+                            UPDATE {self.city_table_name} SET search_vector = 
+                                setweight(to_tsvector('english', coalesce(name, '')), 'A') ||
+                                setweight(to_tsvector('english', coalesce(ascii_name, '')), 'A') ||
+                                setweight(to_tsvector('english', coalesce(state, '')), 'B') ||
+                                setweight(to_tsvector('english', coalesce(country, '')), 'C');
+                                
+                            -- Create GIN index
+                            CREATE INDEX IF NOT EXISTS idx_city_search_vector ON {self.city_table_name} USING GIN(search_vector);
+                            
+                            -- Create trigger for updates
+                            CREATE OR REPLACE FUNCTION city_search_vector_update() RETURNS trigger AS $$
+                            BEGIN
+                                NEW.search_vector := 
+                                    setweight(to_tsvector('english', coalesce(NEW.name, '')), 'A') ||
+                                    setweight(to_tsvector('english', coalesce(NEW.ascii_name, '')), 'A') ||
+                                    setweight(to_tsvector('english', coalesce(NEW.state, '')), 'B') ||
+                                    setweight(to_tsvector('english', coalesce(NEW.country, '')), 'C');
+                                RETURN NEW;
+                            END
+                            $$ LANGUAGE plpgsql;
+                            
+                            CREATE TRIGGER city_search_update
+                            BEFORE INSERT OR UPDATE ON {self.city_table_name}
+                            FOR EACH ROW EXECUTE FUNCTION city_search_vector_update();
+                        END IF;
+                    END $$;
+                    ''')
+                    
+                    logger.info("Created PostgreSQL full-text search index with tsvector and GIN")
             except Exception as e:
-                logger.warning(f"Could not create tsvector column and GIN index: {str(e)}")
+                logger.warning(f"Error creating PostgreSQL search optimizations: {str(e)}")
     
     def get_table_info(self) -> Dict[str, Any]:
         """

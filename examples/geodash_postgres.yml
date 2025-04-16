@@ -1,0 +1,122 @@
+# GeoDash PostgreSQL Configuration
+# 
+# This configuration file demonstrates how to set up GeoDash with PostgreSQL and PostGIS
+# for advanced spatial query capabilities in production environments.
+
+# Set to advanced mode to enable all features
+mode: "advanced"
+
+# Enable all features for PostgreSQL optimized setup
+features:
+  enable_fuzzy_search: true
+  enable_location_aware: true
+  enable_memory_caching: true
+  enable_shared_memory: true
+  enable_advanced_db: true
+  # Disable auto fetch in production environments
+  auto_fetch_data: false
+
+# Data configuration
+data:
+  # Specify a custom data location for production deployments
+  location: "/var/lib/geodash/data/cities.csv"
+  # Optionally limit to specific countries for specialized applications
+  # countries: "US,CA,MX,GB,FR,DE,ES,IT"
+  countries: "ALL"
+  download_url: "https://raw.githubusercontent.com/dr5hn/countries-states-cities-database/refs/heads/master/csv/cities.csv"
+  # Larger batch size for faster imports on powerful database servers
+  batch_size: 10000
+
+# Database configuration
+database:
+  # Set type to PostgreSQL
+  type: postgresql
+  
+  # PostgreSQL connection settings
+  postgresql:
+    host: "localhost"
+    port: 5432
+    database: "geodash"
+    user: "geodash_user"
+    password: "your_secure_password"  # Use environment variables in production
+    # Enable PostGIS for spatial operations
+    postgis: true
+  
+  # Optimize connection pooling for PostgreSQL
+  pool:
+    enabled: true
+    # Adjust pool size based on your server capacity
+    min_size: 5
+    max_size: 20
+    timeout: 30
+
+# Search configuration optimized for PostgreSQL
+search:
+  # Fuzzy search with PostgreSQL's text search capabilities
+  fuzzy:
+    threshold: 75  # Slightly higher threshold for better precision
+    enabled: true
+  
+  # PostGIS-based location-aware searching
+  location_aware:
+    enabled: true
+    distance_weight: 0.4  # Increase weight for distance-based sorting
+    country_boost: 25000
+  
+  # Larger cache size for production environments
+  cache:
+    enabled: true
+    size: 10000
+    ttl: 7200  # Longer TTL for more stable data
+  
+  # Generous limits for API use
+  limits:
+    default: 15
+    max: 200
+
+# Production logging configuration
+logging:
+  level: warning  # Use warning level in production to reduce log volume
+  format: json  # JSON format for better log processing
+  file: "/var/log/geodash/geodash.log"  # Log to file in production
+
+# API configuration for production
+api:
+  host: "0.0.0.0"
+  port: 8080
+  debug: false
+  # Adjust worker count based on available CPU cores
+  workers: 8
+  
+  # CORS configuration for production
+  cors:
+    enabled: true
+    # Restrict origins in production
+    origins: ["https://your-domain.com", "https://api.your-domain.com"]
+    methods: ["GET"]
+  
+  # Enable rate limiting in production
+  rate_limit:
+    enabled: true
+    limit: 200
+    window: 60
+
+# PostgreSQL Performance Tuning Notes
+# 
+# For optimal performance with GeoDash and PostgreSQL:
+# 
+# 1. Create appropriate indexes:
+#    - PostgreSQL will create btree indexes automatically
+#    - PostGIS will handle spatial indexing
+# 
+# 2. Configure PostgreSQL for your hardware:
+#    - shared_buffers: 25% of available RAM
+#    - effective_cache_size: 75% of available RAM
+#    - work_mem: 32-64MB for complex queries
+#    - maintenance_work_mem: 256MB for faster database maintenance
+# 
+# 3. Ensure PostGIS is properly installed:
+#    CREATE EXTENSION postgis;
+# 
+# 4. Consider partitioning for very large datasets:
+#    - Partition by country or continent for better query performance 

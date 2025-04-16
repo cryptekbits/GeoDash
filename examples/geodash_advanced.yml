@@ -1,0 +1,123 @@
+# GeoDash Advanced Configuration
+# 
+# This is a comprehensive configuration file for GeoDash in "advanced" mode.
+# This mode enables all features for maximum functionality.
+
+# Set the operation mode to "advanced"
+mode: "advanced"
+
+# Configure all features for maximum functionality
+features:
+  enable_fuzzy_search: true
+  enable_location_aware: true
+  enable_memory_caching: true
+  enable_shared_memory: true
+  enable_advanced_db: true
+  auto_fetch_data: true
+
+# Data configuration
+data:
+  # Optional path to data file - uses default location if null
+  location: null
+  # Include all countries
+  countries: "ALL"
+  # URL to download city data from
+  download_url: "https://raw.githubusercontent.com/dr5hn/countries-states-cities-database/refs/heads/master/csv/cities.csv"
+  # Batch size for data imports
+  batch_size: 5000
+
+# Database configuration
+database:
+  # Using SQLite for the default advanced configuration
+  type: sqlite
+  
+  # SQLite configuration
+  sqlite:
+    # Using default path (set to null)
+    path: null
+    # Enable R-Tree spatial index for location queries
+    rtree: true
+    # Enable FTS (Full-Text Search) for text search
+    fts: true
+  
+  # PostgreSQL configuration (not used in this example but configured)
+  postgresql:
+    host: "localhost"
+    port: 5432
+    database: "geodash"
+    user: null
+    password: null
+    postgis: true
+  
+  # Connection pool configuration
+  pool:
+    enabled: true
+    min_size: 2
+    max_size: 10
+    timeout: 30
+
+# Search configuration
+search:
+  # Fuzzy search settings
+  fuzzy:
+    # Threshold for fuzzy matching (higher values require closer matches)
+    threshold: 70
+    enabled: true
+  
+  # Location-aware search settings
+  location_aware:
+    enabled: true
+    # Weight for distance in result sorting (0-1)
+    distance_weight: 0.3
+    # Boost value for matches in user's country
+    country_boost: 25000
+  
+  # Cache settings
+  cache:
+    enabled: true
+    # Maximum number of entries in the cache
+    size: 5000
+    # Cache time-to-live in seconds
+    ttl: 3600
+  
+  # Search result limits
+  limits:
+    default: 10
+    max: 100
+
+# Logging configuration
+logging:
+  # Logging level (debug, info, warning, error, critical)
+  level: info
+  # Logging format (json, text)
+  format: json
+  # Log to stdout by default
+  file: null
+
+# API configuration
+api:
+  # Host to bind the API server to
+  host: "0.0.0.0"
+  # Port to run the API server on
+  port: 5000
+  # Debug mode (false for production)
+  debug: false
+  # Number of worker processes (null uses CPU count)
+  workers: 4
+  
+  # CORS configuration
+  cors:
+    enabled: true
+    # Origins allowed to access the API
+    origins: ["*"]
+    # HTTP methods allowed
+    methods: ["GET"]
+  
+  # Rate limiting configuration
+  rate_limit:
+    # Enable rate limiting for production use
+    enabled: true
+    # Number of requests allowed
+    limit: 100
+    # Time window in seconds for the limit
+    window: 60 

@@ -10,6 +10,7 @@ import json
 from typing import Dict, Any, List, Union, Optional, Tuple, Callable
 from functools import wraps
 import os
+import sys
 
 from flask import Flask, request, jsonify, Response, g, current_app
 import werkzeug.exceptions
@@ -20,6 +21,7 @@ from GeoDash.services.city_service import CityService
 from GeoDash.utils import log_error_with_github_info
 from GeoDash.utils.logging import get_logger
 from GeoDash.exceptions import GeoDataError, InvalidParameterError
+from GeoDash.config import get_config
 
 # Get a logger for this module
 logger = get_logger(__name__)
@@ -117,18 +119,27 @@ def api_response(f: Callable) -> Callable:
     
     return decorated_function
 
-def create_app(db_uri: Optional[str] = None, debug: bool = False) -> Flask:
+def create_app(db_uri: Optional[str] = None, debug: bool = False, config=None) -> Flask:
     """
     Create and configure a Flask application instance.
     
     Args:
         db_uri: Optional database URI to use for the app
         debug: Enable debug mode with additional error information
+        config: Optional configuration object to use for app settings
         
     Returns:
         A configured Flask application
     """
     app = Flask(__name__)
+    
+    # Use the provided config or get the global one
+    if config is None:
+        config = get_config()
+    
+    # Get API config settings
+    api_config = config.get("api", {})
+    debug = debug or api_config.get("debug", False)
     
     # Configure the app
     app.config.update(
@@ -146,6 +157,44 @@ def create_app(db_uri: Optional[str] = None, debug: bool = False) -> Flask:
     db_initialized = os.environ.get('GEODASH_DB_INITIALIZED') == '1'
     
     logger.info(f"Worker {worker_id}: Creating Flask application")
+    
+    # Store config in app for use in route handlers
+    app.config['GEODASH_CONFIG'] = config
+    
+    # Set up CORS if enabled
+    cors_config = api_config.get("cors", {})
+    if cors_config.get("enabled", True):
+        try:
+            from flask_cors import CORS
+            origins = cors_config.get("origins", ["*"])
+            methods = cors_config.get("methods", ["GET"])
+            
+            logger.info(f"Enabling CORS with origins: {origins}, methods: {methods}")
+            CORS(app, resources={r"/api/*": {"origins": origins, "methods": methods}})
+        except ImportError:
+            logger.warning("flask_cors not installed, CORS support disabled")
+    
+    # Set up rate limiting if enabled
+    rate_limit_config = api_config.get("rate_limit", {})
+    if rate_limit_config.get("enabled", False):
+        try:
+            from flask_limiter import Limiter
+            from flask_limiter.util import get_remote_address
+            
+            limit = rate_limit_config.get("limit", 100)
+            window = rate_limit_config.get("window", 60)
+            
+            logger.info(f"Enabling rate limiting: {limit} requests per {window} seconds")
+            
+            limiter = Limiter(
+                get_remote_address,
+                app=app,
+                default_limits=[f"{limit} per {window} seconds"],
+                storage_uri="memory://"
+            )
+            app.config['LIMITER'] = limiter
+        except ImportError:
+            logger.warning("flask_limiter not installed, rate limiting disabled")
     
     # Create a persistent connection to the database for this worker
     try:
@@ -786,22 +835,53 @@ def register_routes(app: Flask) -> None:
             'cities': cities
         }
 
-def start_server(host: str = '0.0.0.0', port: int = 5000, 
-                db_uri: Optional[str] = None, debug: bool = False) -> None:
+def start_server(host: str = None, port: int = None, 
+                db_uri: Optional[str] = None, debug: bool = None, config=None) -> None:
     """
     Start the API server.
     
     Args:
-        host: Host address to bind to
-        port: Port to listen on
+        host: Host address to bind to (overrides config)
+        port: Port to listen on (overrides config)
         db_uri: Database URI for city data
-        debug: Whether to run in debug mode
+        debug: Whether to run in debug mode (overrides config)
+        config: Optional configuration to use
     """
-    app = create_app(db_uri, debug)
+    # Use provided config or get the global one
+    if config is None:
+        config = get_config()
+    
+    # Get settings from config if not explicitly provided
+    api_config = config.get("api", {})
+    
+    if host is None:
+        host = api_config.get("host", "0.0.0.0")
+    
+    if port is None:
+        port = api_config.get("port", 5000)
+    
+    if debug is None:
+        debug = api_config.get("debug", False)
+    
+    # Check feature flags
+    features = config.get("features", {})
+    mode = config.get("mode", "advanced")
+    
+    # Create the Flask app with the config
+    app = create_app(db_uri, debug, config)
+    
+    # Set worker count if specified
+    workers = api_config.get("workers")
+    if workers is not None:
+        os.environ["GEODASH_WORKERS"] = str(workers)
     
     # Check if the database is ready
     if app.config.get('INITIALIZED', False):
         logger.info(f"Starting GeoDash API server on {host}:{port} (debug: {debug})")
+        
+        # Enable advanced API features only in advanced mode
+        if mode != "advanced":
+            logger.info("Simple mode enabled: some advanced API features will be disabled")
         
         # Run the Flask application
         app.run(host=host, port=port, debug=debug)
@@ -824,8 +904,9 @@ def start_server(host: str = '0.0.0.0', port: int = 5000,
             app.run(host=host, port=port, debug=debug)
             
         except Exception as e:
-            logger.error(f"Failed to initialize database: {str(e)}")
-            raise RuntimeError("Could not start server due to database initialization failure") from e
+            log_error_with_github_info(e, "Failed to initialize database")
+            logger.error("Could not initialize the database. Check your configuration and try again.")
+            sys.exit(1)
 
 if __name__ == '__main__':
     import argparse

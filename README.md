@@ -264,6 +264,104 @@ navigator.geolocation.getCurrentPosition(position => {
 });
 ```
 
+## Configuration
+
+GeoDash provides a flexible configuration system that allows you to customize its behavior to fit your specific needs. You can configure database settings, search options, feature flags, API parameters, and more.
+
+### Basic Configuration
+
+To use a custom configuration file:
+
+```python
+from GeoDash import CityData
+
+# Load configuration from a custom file
+cities = CityData(config_path='/path/to/your/geodash.yml')
+```
+
+You can also override specific configuration options programmatically:
+
+```python
+cities = CityData(config_overrides={
+    'database': {
+        'type': 'postgresql',
+        'postgresql': {
+            'host': 'localhost',
+            'database': 'geodash_test'
+        }
+    }
+})
+```
+
+### Simple vs Advanced Mode
+
+GeoDash supports two operation modes:
+
+- **Simple Mode**: Optimized for lower-end systems by disabling resource-intensive features.
+- **Advanced Mode**: Enables all features for maximum functionality (default).
+
+```python
+# Use simple mode
+cities = CityData(config_overrides={'mode': 'simple'})
+```
+
+### Configuration File Locations
+
+GeoDash looks for configuration files in the following locations (in order of priority):
+
+1. Custom path specified with `config_path` parameter
+2. Current working directory: `./geodash.yml`
+3. User's home directory: `~/.geodash/geodash.yml`
+4. GeoDash package directory: `[package_path]/data/geodash.yml`
+
+### Example Configuration
+
+Here's a simple example configuration file in YAML format:
+
+```yaml
+# Set the operation mode
+mode: "advanced"
+
+# Feature flags
+features:
+  enable_fuzzy_search: true
+  enable_location_aware: true
+  enable_memory_caching: true
+  enable_shared_memory: true
+  enable_advanced_db: true
+  auto_fetch_data: true
+
+# Database configuration
+database:
+  type: sqlite
+  sqlite:
+    path: "/path/to/geodash.db"
+    rtree: true
+    fts: true
+  
+# Search configuration
+search:
+  fuzzy:
+    threshold: 70
+    enabled: true
+  limits:
+    default: 10
+    max: 100
+```
+
+### Detailed Configuration Guide
+
+For comprehensive documentation of all configuration options, please see the [Configuration Guide](docs/configuration.md).
+
+Example configuration files are available in the `examples/` directory:
+- [Simple Configuration](examples/geodash_simple.yml)
+- [Advanced Configuration](examples/geodash_advanced.yml)
+- [PostgreSQL Configuration](examples/geodash_postgres.yml)
+
+### Feature Flags
+
+GeoDash uses feature flags to enable or disable specific functionality. For detailed information about available flags and their effects, see the [Feature Flags Reference](docs/feature_flags.md).
+
 ## Production Deployment
 
 For production environments, GeoDash includes a helper script:
@@ -347,8 +445,8 @@ set_log_level('debug')  # or 'info', 'warning', 'error', 'critical'
 # More advanced configuration
 configure_logging(
     level='info',
-    use_json=True,  # Use JSON structured logging
-    log_file='/path/to/log.json'  # Optional log file
+    use_json=False,  # Optional: Use JSON structured logging (defaults to False)
+    log_file='/path/to/log.txt'  # Optional log file
 )
 ```
 

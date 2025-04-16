@@ -32,6 +32,9 @@ from importlib import import_module
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Union, Tuple
 
+# Import configuration system first
+from GeoDash.config import get_config
+
 # Import and configure logging early
 from GeoDash.utils.logging import get_logger, set_log_level, configure_logging
 
@@ -39,6 +42,19 @@ __version__ = '1.0.0'
 
 # Get a logger for the main package
 logger = get_logger(__name__)
+
+def initialize_config() -> bool:
+    """
+    Initialize the GeoDash configuration system.
+    
+    This function searches for a configuration file in standard locations
+    and loads it if found. If not found, defaults are used.
+    
+    Returns:
+        bool: True if a config file was found and loaded, False if using defaults
+    """
+    logger.debug("Initializing configuration system")
+    return get_config().load_config()
 
 def initialize() -> bool:
     """
@@ -52,6 +68,9 @@ def initialize() -> bool:
         bool: True if city data was found or successfully downloaded,
               False if download failed
     """
+    # Initialize configuration first
+    initialize_config()
+    
     # Try to find cities.csv in standard locations
     standard_locations: List[str] = [
         os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'cities.csv'),
@@ -84,4 +103,4 @@ from GeoDash.data.city_manager import CityData
 from GeoDash.api.server import start_server
 
 # Export key functions for public API
-__all__ = ['CityData', 'start_server', 'initialize', 'set_log_level'] 
+__all__ = ['CityData', 'start_server', 'initialize', 'initialize_config', 'set_log_level', 'get_config'] 

@@ -1,0 +1,198 @@
+# GeoDash Configuration File
+# 
+# This is an example configuration file for GeoDash. You can use this as a template
+# to create your own configuration files in one of the following locations:
+#
+# - Current working directory: ./geodash.yml
+# - User's home directory: ~/.geodash/geodash.yml
+# - GeoDash package directory: [package_path]/data/geodash.yml
+
+# GeoDash operation mode: "simple" or "advanced"
+# - simple: Disables some advanced features for better performance on lower-end systems
+# - advanced: Enables all features for maximum functionality (default)
+mode: "advanced"
+
+# Feature flags configuration
+# Toggle individual features on/off
+features:
+  # Enable fuzzy search for city names (improves search but increases CPU usage)
+  # Automatically disabled in simple mode
+  enable_fuzzy_search: true
+  
+  # Enable location-aware features (for geolocation-based queries)
+  enable_location_aware: true
+  
+  # Enable in-memory caching for faster repeated queries
+  enable_memory_caching: true
+  
+  # Enable shared memory for inter-process communication
+  # Automatically disabled in simple mode
+  enable_shared_memory: true
+  
+  # Enable advanced database features (indexes, full-text search)
+  # Automatically disabled in simple mode
+  enable_advanced_db: true
+  
+  # Automatically fetch missing data when needed
+  auto_fetch_data: true
+
+# Data configuration
+data:
+  # Optional: Path to cities.csv file or directory where it should be downloaded
+  # If not specified, the data will be downloaded to the default location
+  # location: "/path/to/cities.csv"
+  
+  # Countries to include: "ALL" or comma-separated list of ISO country codes
+  # Examples: 
+  #   - "ALL" - Include all countries (default)
+  #   - "US,CA,MX" - Only include United States, Canada, and Mexico
+  #   - "DE,FR,IT,ES" - Only include select European countries
+  countries: "ALL"
+  
+  # URL to download city data from
+  download_url: "https://raw.githubusercontent.com/dr5hn/countries-states-cities-database/refs/heads/master/csv/cities.csv"
+  
+  # Batch size for importing city data
+  # Larger values use more memory but import faster
+  # Must be between 100 and 50000
+  batch_size: 5000
+
+# Database configuration
+database:
+  # Database type: 'sqlite' (default) or 'postgresql'
+  type: sqlite
+  
+  # SQLite configuration
+  sqlite:
+    # Path to SQLite database file (null means default location)
+    # path: "/path/to/geodash.db"
+    
+    # Enable R-Tree spatial index for location queries
+    rtree: true
+    
+    # Enable FTS (Full-Text Search) for text search
+    fts: true
+  
+  # PostgreSQL configuration
+  postgresql:
+    # Host for PostgreSQL connection
+    host: "localhost"
+    
+    # Port for PostgreSQL connection
+    port: 5432
+    
+    # Database name for PostgreSQL connection
+    database: "geodash"
+    
+    # User for PostgreSQL connection (null means use system user)
+    # user: "postgres"
+    
+    # Password for PostgreSQL connection (null means use system auth)
+    # password: "your_password"
+    
+    # Enable PostGIS extension for spatial operations
+    postgis: true
+  
+  # Connection pool configuration
+  pool:
+    # Enable connection pooling
+    enabled: true
+    
+    # Minimum number of connections in the pool
+    min_size: 2
+    
+    # Maximum number of connections in the pool
+    max_size: 10
+    
+    # Connection timeout in seconds
+    timeout: 30
+
+# Search configuration
+search:
+  # Fuzzy search settings
+  fuzzy:
+    # Fuzzy matching threshold (0-100)
+    # Higher values require closer matches
+    # - 100: Exact matches only
+    # - 70: Recommended default for city names
+    # - Below 50: May generate too many false positives
+    threshold: 70
+    
+    # Whether to enable fuzzy matching
+    enabled: true
+  
+  # Location-aware search settings
+  location_aware:
+    # Whether to enable location-aware search
+    enabled: true
+    
+    # Weight for distance in result sorting (0-1)
+    # Higher values give more importance to closer locations
+    # - 0: Distance doesn't affect results
+    # - 0.3: Balanced default
+    # - 1: Distance is the primary factor
+    distance_weight: 0.3
+    
+    # Boost value for matches in user's country
+    # Higher values favor cities in the same country
+    country_boost: 25000
+  
+  # Search result caching
+  cache:
+    # Whether to enable search caching
+    enabled: true
+    
+    # Maximum number of entries in the cache
+    # Higher values use more memory but improve performance for repeated searches
+    size: 5000
+    
+    # Cache time-to-live in seconds
+    # How long search results stay valid before being recalculated
+    ttl: 3600
+  
+  # Search result limits
+  limits:
+    # Default number of results to return
+    default: 10
+    
+    # Maximum allowed number of results
+    max: 100
+
+# Logging configuration
+logging:
+  # Logging level: 'debug', 'info' (default), 'warning', 'error', 'critical'
+  # Set to 'debug' for development environments
+  # Set to 'info' or 'warning' for production environments
+  level: info
+  
+  # Logging format: 'json' (default), 'text'
+  # JSON format is recommended for production environments
+  # Text format is more readable for development
+  format: json
+  
+  # Optional: Log file path
+  # If not specified, logs will be sent to stdout
+  # file: /var/log/geodash.log
+  
+  # Optional: Log rotation settings
+  # rotation:
+  #   max_size_mb: 10
+  #   backup_count: 5
+
+# API server configuration
+# server:
+#   # Host to bind the server to
+#   host: 0.0.0.0
+#   
+#   # Port to run the server on
+#   port: 8080
+#   
+#   # Number of worker processes (for production environments)
+#   workers: 4
+#   
+#   # Enable CORS for specific origins (comma-separated list)
+#   # cors_origins: http://localhost:3000,https://example.com
+#   
+#   # Secret key for session encryption
+#   # This should be a random string and kept secret
+#   secret_key: CHANGE_THIS_TO_A_RANDOM_STRING 

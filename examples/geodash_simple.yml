@@ -1,0 +1,66 @@
+# GeoDash Simple Configuration
+# 
+# This is a minimal configuration file for GeoDash in "simple" mode.
+# This mode is optimized for lower-end systems by disabling resource-intensive features.
+
+# Set the operation mode to "simple"
+mode: "simple"
+
+# Configure basic features
+# Note: In simple mode, fuzzy_search, shared_memory, and advanced_db are automatically disabled
+features:
+  enable_location_aware: true
+  enable_memory_caching: true
+  auto_fetch_data: true
+
+# Database configuration (using SQLite)
+database:
+  type: sqlite
+  sqlite:
+    # Using default path (set to null)
+    path: null
+    # R-Tree and FTS are disabled in simple mode regardless of these settings
+    rtree: false
+    fts: false
+
+# Search configuration
+search:
+  # Fuzzy search is disabled in simple mode
+  fuzzy:
+    enabled: false
+  
+  # Location-aware search settings
+  location_aware:
+    enabled: true
+    distance_weight: 0.3
+    country_boost: 25000
+  
+  # Cache settings
+  cache:
+    enabled: true
+    size: 1000  # Smaller cache size for minimal memory usage
+    ttl: 3600
+  
+  # Search result limits
+  limits:
+    default: 5
+    max: 50
+
+# Logging configuration
+logging:
+  level: info
+  format: text  # Text format is more readable for simple setups
+  file: null  # Log to stdout
+
+# API configuration
+api:
+  host: "127.0.0.1"  # Only accept local connections
+  port: 5000
+  debug: false
+  workers: 1  # Single worker for simple deployments
+  cors:
+    enabled: true
+    origins: ["*"]
+    methods: ["GET"]
+  rate_limit:
+    enabled: false 

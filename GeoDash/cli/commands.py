@@ -14,6 +14,8 @@ from GeoDash.services.city_service import CityService
 from GeoDash.api.server import start_server
 from GeoDash.utils import log_error_with_github_info
 from GeoDash.utils.logging import get_logger, set_log_level
+from GeoDash.config import get_config
+from GeoDash.cli.config_commands import config_show, config_init, config_validate
 
 # Get a logger for this module
 logger = get_logger(__name__)
@@ -38,6 +40,40 @@ def apply_log_level(ctx, param, value):
 def cli():
     """GeoDash CLI for accessing city data."""
     pass
+
+# Configuration commands group
+@cli.group('config')
+def config_group():
+    """
+    Manage GeoDash configuration.
+    
+    Commands for working with the configuration system, including viewing,
+    creating, and validating configuration files.
+    """
+    pass
+
+@config_group.command('show')
+@click.option('--format', 'format_type', type=click.Choice(['yaml', 'json'], case_sensitive=False), 
+              default='yaml', help='Output format (yaml or json)')
+@click.option('--section', help='Show only a specific configuration section')
+@log_level_option
+def show_config_command(format_type, section, log_level):
+    """Display the current active configuration."""
+    return config_show(format_type, section)
+
+@config_group.command('init')
+@click.option('--output', 'output_path', help='Path where to create the configuration file')
+@log_level_option
+def init_config_command(output_path, log_level):
+    """Create a template configuration file with explanatory comments."""
+    return config_init(output_path)
+
+@config_group.command('validate')
+@click.argument('config_path')
+@log_level_option
+def validate_config_command(config_path, log_level):
+    """Validate a configuration file."""
+    return config_validate(config_path)
 
 @cli.command('search')
 @click.argument('query')
@@ -220,6 +256,17 @@ def server_command(host, port, debug, db_uri, log_level):
 def main():
     """Main entry point for the GeoDash command-line interface."""
     try:
+        # Load configuration before executing commands
+        config = get_config()
+        config.load_config()
+        
+        # Setup logging from configuration if not overridden by command line
+        log_level = config.get("logging.level", "info")
+        set_log_level(log_level)
+        
+        logger.debug("Configuration loaded successfully")
+        
+        # Run the CLI
         return cli()
     except Exception as e:
         log_error_with_github_info(e, "Error in CLI command")
