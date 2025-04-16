@@ -1,3 +1,7 @@
+<div align="center">
+  <img src="resources/banner.png" alt="GeoDash Banner" width="100%">
+</div>
+
 # GeoDash
 
 A Python module for managing city data with fast coordinate queries and autocomplete functionality.
@@ -103,7 +107,7 @@ async function handleCityInputChange(value) {
     // Start searching after 3 characters are typed
     const response = await fetch(`/api/cities/search?query=${value}&limit=10`);
     const cities = await response.json();
-    
+
     // Display suggestions to the user
     updateSuggestions(cities);
   }
@@ -218,14 +222,14 @@ GeoDash provides a location-aware search feature that prioritizes search results
 2. **Location prioritization** - From the matching cities, the results are prioritized based on:
    - User's country (if provided via `user_country` parameter)
    - Proximity to user's coordinates (if provided via `user_lat` and `user_lng` parameters)
-   
+
 ### Examples
 
 ```python
 # Prioritize "San" cities near San Francisco coordinates
 cities = city_data.search_cities(
     'San',
-    user_lat=37.7749, 
+    user_lat=37.7749,
     user_lng=-122.4194
 )
 
@@ -239,7 +243,7 @@ cities = city_data.search_cities(
 cities = city_data.search_cities(
     'New',
     user_country='United States',
-    user_lat=40.7128, 
+    user_lat=40.7128,
     user_lng=-74.0060
 )
 ```
@@ -253,7 +257,7 @@ You can use this feature in your frontend applications to provide personalized s
 navigator.geolocation.getCurrentPosition(position => {
   const lat = position.coords.latitude;
   const lng = position.coords.longitude;
-  
+
   // Call the API with user's coordinates
   fetch(`/api/cities/search?query=${searchText}&user_lat=${lat}&user_lng=${lng}`)
     .then(response => response.json())
@@ -338,7 +342,7 @@ database:
     path: "/path/to/geodash.db"
     rtree: true
     fts: true
-  
+
 # Search configuration
 search:
   fuzzy:
@@ -399,7 +403,7 @@ pip install -e .
 
 ## License
 
-MIT 
+MIT
 
 ## Logging
 
@@ -518,4 +522,4 @@ logger.info("General information")
 logger.warning("Warning message")
 logger.error("Error message")
 logger.critical("Critical error")
-``` 
+```
