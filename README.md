@@ -52,8 +52,12 @@ When installing from source, the city data CSV file will be automatically downlo
 - Population-based sorting for more relevant results
 - Location-aware search that prioritizes results based on user's coordinates or country
 - Support for both SQLite and PostgreSQL databases
-- Command-line interface
-- API server mode
+- Comprehensive configuration system with YAML/JSON support
+- Feature flags for fine-grained control over functionality
+- Simple and Advanced operation modes for different resource requirements
+- Command-line interface with configuration management
+- API server mode with CORS and rate limiting support
+- Structured logging with JSON format option
 
 ## Usage
 
@@ -121,7 +125,7 @@ async function handleCityInputChange(value) {
 GeoDash search "New York" --limit 5 --country "United States"
 
 # Get a city by ID
-GeoDash get-city 1234
+GeoDash city 1234
 
 # Get cities near coordinates
 GeoDash coordinates 40.7128 -74.0060 --radius 10
@@ -137,6 +141,28 @@ GeoDash cities-in-state "California" "United States"
 
 # Start the API server
 GeoDash server --host 0.0.0.0 --port 5000 --debug
+
+# Import city data from a CSV file
+GeoDash import --csv-path /path/to/cities.csv
+
+# Configuration management
+GeoDash config show                      # Show current configuration
+GeoDash config show --section database   # Show only database configuration
+GeoDash config show --format json        # Show configuration in JSON format
+GeoDash config init --output ~/my-config.yml  # Create a template configuration file
+GeoDash config validate ~/my-config.yml  # Validate a configuration file
+```
+
+#### Log Level Control
+
+All CLI commands support the `--log-level` option to control verbosity:
+
+```bash
+# Run any command with increased verbosity
+GeoDash search "New York" --log-level debug
+
+# Run with minimal logging
+GeoDash server --log-level error
 ```
 
 ### As an API Server
@@ -144,6 +170,28 @@ GeoDash server --host 0.0.0.0 --port 5000 --debug
 ```bash
 # Start the API server using the console script
 GeoDash server --host 0.0.0.0 --port 5000 --debug
+
+# Or use configuration-driven settings (no need to specify parameters)
+GeoDash server
+```
+
+The server can be configured through the configuration file:
+
+```yaml
+# API configuration in geodash.yml
+api:
+  host: "0.0.0.0"
+  port: 5000
+  debug: false
+  workers: 4  # Number of worker processes
+  cors:
+    enabled: true
+    origins: ["*"]
+    methods: ["GET"]
+  rate_limit:
+    enabled: true
+    limit: 100
+    window: 60  # seconds
 ```
 
 #### API Endpoints
@@ -314,9 +362,25 @@ cities = CityData(config_overrides={'mode': 'simple'})
 GeoDash looks for configuration files in the following locations (in order of priority):
 
 1. Custom path specified with `config_path` parameter
-2. Current working directory: `./geodash.yml`
-3. User's home directory: `~/.geodash/geodash.yml`
-4. GeoDash package directory: `[package_path]/data/geodash.yml`
+2. Path specified in the `GEODASH_CONFIG` environment variable
+3. Current working directory: `./geodash.yml`
+4. User's home directory: `~/.geodash/geodash.yml`
+5. GeoDash package directory: `[package_path]/data/geodash.yml`
+
+### Environment Variables
+
+GeoDash supports configuration through environment variables:
+
+- `GEODASH_CONFIG`: Path to a configuration file
+- `GEODASH_MODE`: Operation mode (`simple` or `advanced`)
+- `GEODASH_LOG_LEVEL`: Logging level (`debug`, `info`, `warning`, `error`, `critical`)
+- `GEODASH_LOG_FORMAT`: Logging format (`json` or `text`)
+- `GEODASH_LOG_FILE`: Path to a log file
+- `GEODASH_DB_URI`: Database URI (overrides configuration file)
+- `GEODASH_API_HOST`: API server host
+- `GEODASH_API_PORT`: API server port
+- `GEODASH_API_DEBUG`: Enable API debug mode (`true` or `false`)
+- `GEODASH_WORKERS`: Number of worker processes for the API server
 
 ### Example Configuration
 
