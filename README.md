@@ -17,7 +17,7 @@ pip install GeoDash
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/GeoDash.git
+git clone https://github.com/cryptekbits/GeoDash.git
 cd GeoDash
 
 # Install directly
@@ -458,7 +458,7 @@ For development, clone the repository and install in development mode:
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/GeoDash.git
+git clone https://github.com/cryptekbits/GeoDash.git
 cd GeoDash
 
 # Install in development mode
